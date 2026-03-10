@@ -1,3 +1,4 @@
+-- main.lua
 gdebug.log_info("RPG System: Main")
 
 local mod = game.mod_runtime[game.current_mod]
@@ -68,6 +69,7 @@ local XP_EXPONENT = 3.65
 -- Progression Constants
 local LEVELS_PER_STAT_POINT = 2
 local LEVELS_PER_TRAIT_SLOT = 5
+local DEFAULT_SYSTEM_MENU_KEY = "{"
 
 -- Function to register a new mutation with the RPG system (can be called by other mods)
 -- config: table with mutation properties (id, type, symbol, requirements, stat_bonuses, etc.)
@@ -112,13 +114,19 @@ local function set_char_value(char, key, value) char:set_value(key, tostring(val
 -- Common requirement checking and formatting
 local function check_requirements(player, mutation, current_level)
   local reqs = mutation.requirements
-  if not reqs or (not reqs.level and not reqs.stats and not reqs.skills) then return true, {} end
+  if not reqs or (not reqs.level and not reqs.stats and not reqs.skills) then return true, {}, {} end
 
   local unmet = {}
+  local all_reqs = {}
 
   -- Check level requirement
-  if reqs.level and current_level < reqs.level then
-    table.insert(unmet, { type = "level", label = "Lv", current = current_level, required = reqs.level })
+  if reqs.level then
+    local met = current_level >= reqs.level
+    local req_info = { type = "level", label = "Lv", current = current_level, required = reqs.level, met = met }
+    table.insert(all_reqs, req_info)
+    if not met then
+      table.insert(unmet, req_info)
+    end
   end
 
   -- Check stat requirements
@@ -131,8 +139,11 @@ local function check_requirements(player, mutation, current_level)
     }
     for stat, required in pairs(reqs.stats) do
       local current = stats_map[stat]
-      if current < required then
-        table.insert(unmet, { type = "stat", label = stat, current = current, required = required })
+      local met = current >= required
+      local req_info = { type = "stat", label = stat, current = current, required = required, met = met }
+      table.insert(all_reqs, req_info)
+      if not met then
+        table.insert(unmet, req_info)
       end
     end
   end
@@ -141,18 +152,20 @@ local function check_requirements(player, mutation, current_level)
   if reqs.skills then
     for skill_name, required in pairs(reqs.skills) do
       local current = player:get_skill_level(SkillId.new(skill_name))
-      if current < required then
-        local display_name = skill_name:gsub("^%l", string.upper)
-        table.insert(unmet, { type = "skill", label = display_name, current = current, required = required })
+      local met = current >= required
+      local display_name = skill_name:gsub("^%l", string.upper)
+      local req_info = { type = "skill", label = display_name, current = current, required = required, met = met }
+      table.insert(all_reqs, req_info)
+      if not met then
+        table.insert(unmet, req_info)
       end
     end
   end
 
-  return #unmet == 0, unmet
+  return #unmet == 0, unmet, all_reqs
 end
 
-local function format_requirement(label, current, required, show_current)
-  local met = current >= required
+local function format_requirement(label, current, required, show_current, met)
   local color_fn = met and color_good or color_bad
   if show_current then
     return color_fn(string.format("%s %d/%d", label, current, required))
@@ -161,10 +174,10 @@ local function format_requirement(label, current, required, show_current)
   end
 end
 
-local function format_requirements_list(unmet, show_current)
+local function format_requirements_list(all_reqs, show_current)
   local parts = {}
-  for _, req in ipairs(unmet) do
-    table.insert(parts, format_requirement(req.label, req.current, req.required, show_current))
+  for _, req in ipairs(all_reqs) do
+    table.insert(parts, format_requirement(req.label, req.current, req.required, show_current, req.met))
   end
   return table.concat(parts, ", ")
 end
@@ -197,6 +210,289 @@ local function get_current_traits(char)
   return current
 end
 
+local function get_elapsed_turns()
+  return (gapi.current_turn() - gapi.turn_zero()):to_turns()
+end
+
+local function get_class_name_by_key(class_key)
+  local mutation = MUTATIONS[class_key]
+  if not mutation then return class_key end
+  local class_obj = mutation:get_mutation_id():obj()
+  return class_obj:name()
+end
+
+local function build_class_tree_text()
+  local class_keys = {}
+  local children_by_parent = {}
+
+  for key, mutation in pairs(MUTATIONS) do
+    if mutation.type == "class" then
+      class_keys[#class_keys + 1] = key
+      if mutation.base_class and MUTATIONS[mutation.base_class] and MUTATIONS[mutation.base_class].type == "class" then
+        children_by_parent[mutation.base_class] = children_by_parent[mutation.base_class] or {}
+        children_by_parent[mutation.base_class][#children_by_parent[mutation.base_class] + 1] = key
+      end
+    end
+  end
+
+  table.sort(class_keys)
+  for _, children in pairs(children_by_parent) do
+    table.sort(children)
+  end
+
+  local roots = {}
+  for _, key in ipairs(class_keys) do
+    local base_key = MUTATIONS[key].base_class
+    if not base_key or not MUTATIONS[base_key] or MUTATIONS[base_key].type ~= "class" then
+      roots[#roots + 1] = key
+    end
+  end
+
+  table.sort(roots)
+
+  local lines = {}
+
+  local function walk(class_key, tier)
+    local indent = string.rep("  ", tier - 1)
+    lines[#lines + 1] = indent .. "- " .. get_class_name_by_key(class_key) .. string.format(" (Tier %d)", tier)
+    local children = children_by_parent[class_key] or {}
+    for _, child_key in ipairs(children) do
+      walk(child_key, tier + 1)
+    end
+  end
+
+  for _, root in ipairs(roots) do
+    walk(root, 1)
+  end
+
+  if #lines == 0 then
+    return gettext("No classes are currently registered.")
+  end
+
+  return table.concat(lines, "\n")
+end
+
+mod.register_system_keybind = function()
+  -- Always re-register on game start/load since action menu entries don't persist
+
+  local function open_system_from_action()
+    local avatar = gapi.get_avatar()
+    if not avatar then return end
+    local integrated = get_char_value(avatar, "rpg_system_integrated", 0)
+    if integrated ~= 1 then
+      gapi.add_msg(MsgType.info, color_info(gettext("Use the [System Interface] item first to integrate the [System].")))
+      return
+    end
+    mod.open_rpg_menu({ user = avatar, item = nil, pos = nil })
+  end
+
+  local ok = false
+
+  -- BN PR #7848 schema (https://github.com/cataclysmbn/Cataclysm-BN/pull/7848): register a Lua action-menu entry with bindable hotkey.
+  if gapi.register_action_menu_entry then
+    ok = pcall(function()
+      gapi.register_action_menu_entry({
+        id = "rpg_system:misc_open_menu",
+        name = "Open [System] Menu",
+        category = "misc",
+        hotkey = DEFAULT_SYSTEM_MENU_KEY,
+        fn = open_system_from_action,
+      })
+    end)
+  end
+
+  -- Compatibility fallback for builds that don't expose the new API yet.
+  if (not ok) and game.register_action then
+    ok = pcall(function()
+      game.register_action("RPG_SYSTEM_OPEN_MENU", "Open [System] Menu", open_system_from_action, DEFAULT_SYSTEM_MENU_KEY)
+    end)
+    if not ok then
+      ok = pcall(function()
+        game.register_action("RPG_SYSTEM_OPEN_MENU", "Open [System] Menu", open_system_from_action)
+      end)
+    end
+  end
+
+  if ok then
+    gdebug.log_info("RPG System: Keybind registered successfully")
+  else
+    gdebug.log_info("RPG System: Failed to register keybind action")
+  end
+end
+
+----------------------------------------------------------------
+-- Soul state enforcement and helpers
+----------------------------------------------------------------
+
+-- Keys (saved per-character):
+-- rpg_reset_history -> comma-separated timestamps of resets in format "timestamp:type"
+-- rpg_shatter_stat_refund_done -> 0/1 flag to prevent duplicate stat refunds during shatter
+-- When cumulative resets (class + trait) exceed 2 within a 30-day period, trigger soul_shattered.
+
+local function add_reset_to_history(player, reset_type)
+  local current_time = get_elapsed_turns()
+  local history = player:get_value("rpg_reset_history")
+  if history == "" then
+    history = string.format("%d:%s", current_time, reset_type)
+  else
+    history = history .. "," .. string.format("%d:%s", current_time, reset_type)
+  end
+  player:set_value("rpg_reset_history", history)
+end
+
+local function count_recent_resets(player)
+  local history = player:get_value("rpg_reset_history")
+  if history == "" then return 0 end
+
+  local current_time = get_elapsed_turns()
+  local thirty_days = 60 * 60 * 24 * 30 -- 30 days in seconds
+  local count = 0
+
+  for entry in history:gmatch("[^,]+") do
+    local timestamp_str = entry:match("^(%d+):")
+    if timestamp_str then
+      local timestamp = tonumber(timestamp_str)
+      if current_time - timestamp <= thirty_days then
+        count = count + 1
+      end
+    end
+  end
+
+  return count
+end
+
+local function clean_old_reset_history(player)
+  local history = player:get_value("rpg_reset_history")
+  if history == "" then return end
+
+  local current_time = get_elapsed_turns()
+  local thirty_days = 60 * 60 * 24 * 30
+  local new_entries = {}
+
+  for entry in history:gmatch("[^,]+") do
+    local timestamp_str = entry:match("^(%d+):")
+    if timestamp_str then
+      local timestamp = tonumber(timestamp_str)
+      if current_time - timestamp <= thirty_days then
+        table.insert(new_entries, entry)
+      end
+    end
+  end
+
+  if #new_entries > 0 then
+    player:set_value("rpg_reset_history", table.concat(new_entries, ","))
+  else
+    player:set_value("rpg_reset_history", "")
+  end
+end
+
+local function strip_all_class_and_traits(player)
+  for _, class_id in ipairs(ALL_CLASS_IDS) do
+    if player:has_trait(class_id) then
+      player:remove_mutation(class_id, true)
+    end
+  end
+
+  for _, trait_id in ipairs(ALL_TRAIT_IDS) do
+    if player:has_trait(trait_id) then
+      player:remove_mutation(trait_id, true)
+    end
+  end
+
+  set_char_value(player, "rpg_num_traits", 0)
+end
+
+local function escalate_to_shatter(player)
+  -- Remove damaged_soul, apply soul_shattered for 6 days (144 hours)
+  player:remove_effect(EffectTypeId.new("damaged_soul"))
+  player:remove_effect(EffectTypeId.new("soul_shattered"))
+  player:add_effect(EffectTypeId.new("soul_shattered"), TimeDuration.from_hours(144))
+
+  -- Shattered soul always strips both classes and traits immediately.
+  strip_all_class_and_traits(player)
+
+  -- Refund stat points exactly once per shatter event.
+  -- For pre-existing saves where rpg_assigned_* might be zero or absent,
+  -- we calculate expected total points from level and compare to what is
+  -- currently unassigned to infer the true assigned amount.
+  local refund_done = get_char_value(player, "rpg_shatter_stat_refund_done", 0)
+  if refund_done == 0 then
+    local assigned_str = get_char_value(player, "rpg_assigned_str", 0)
+    local assigned_dex = get_char_value(player, "rpg_assigned_dex", 0)
+    local assigned_int = get_char_value(player, "rpg_assigned_int", 0)
+    local assigned_per = get_char_value(player, "rpg_assigned_per", 0)
+    local tracked_total = assigned_str + assigned_dex + assigned_int + assigned_per
+
+    -- Calculate how many stat points this level should have earned in total
+    local level = get_char_value(player, "rpg_level", 0)
+    local expected_total_points = 0
+    for lv = 1, level do
+      if lv % LEVELS_PER_STAT_POINT == 0 then expected_total_points = expected_total_points + 1 end
+    end
+
+    local unassigned = get_char_value(player, "rpg_stat_points", 0)
+    local total_refund
+
+    if tracked_total > 0 then
+      -- Assigned values are tracked, use them directly
+      total_refund = tracked_total
+    else
+      -- Pre-existing save: infer assigned = expected_total - unassigned
+      total_refund = math.max(0, expected_total_points - unassigned)
+    end
+
+    if total_refund > 0 then
+      set_char_value(player, "rpg_assigned_str", 0)
+      set_char_value(player, "rpg_assigned_dex", 0)
+      set_char_value(player, "rpg_assigned_int", 0)
+      set_char_value(player, "rpg_assigned_per", 0)
+      set_char_value(player, "rpg_stat_points", expected_total_points)
+
+      gapi.add_msg(
+        MsgType.mixed,
+        color_info(string.format(gettext("Your shattered soul releases your bound stat points. %d points refunded."), total_refund))
+      )
+    else
+      -- Nothing to refund but ensure pool is correct
+      set_char_value(player, "rpg_assigned_str", 0)
+      set_char_value(player, "rpg_assigned_dex", 0)
+      set_char_value(player, "rpg_assigned_int", 0)
+      set_char_value(player, "rpg_assigned_per", 0)
+      set_char_value(player, "rpg_stat_points", expected_total_points)
+    end
+
+    set_char_value(player, "rpg_shatter_stat_refund_done", 1)
+  end
+
+  gapi.add_msg(
+    MsgType.bad,
+    color_bad(gettext("Your soul SHATTERS from repeated abandonment! Your body crumbles!"))
+  )
+end
+
+local function enforce_soul_state(player)
+  if not player then return end
+
+  local damaged = player:has_effect(EffectTypeId.new("damaged_soul"))
+  local shattered = player:has_effect(EffectTypeId.new("soul_shattered"))
+
+  -- If soul is healing, clear the refund guard for future shatters
+  if not shattered then
+    set_char_value(player, "rpg_shatter_stat_refund_done", 0)
+  end
+
+  -- Clean old entries from history periodically
+  clean_old_reset_history(player)
+
+  -- ONLY remove classes/traits when shattered (not when just damaged)
+  -- damaged_soul allows keeping one while the other is reset
+  if shattered then strip_all_class_and_traits(player) end
+end
+
+----------------------------------------------------------------
+-- Game lifecycle hooks
+----------------------------------------------------------------
+
 mod.on_game_started = function()
   local player = gapi.get_avatar()
 
@@ -211,13 +507,19 @@ mod.on_game_started = function()
   set_char_value(player, "rpg_assigned_int", 0)
   set_char_value(player, "rpg_assigned_per", 0)
   set_char_value(player, "rpg_level_scaling", 100)
+  set_char_value(player, "rpg_system_integrated", 0)
+  set_char_value(player, "rpg_shatter_stat_refund_done", 0)
+
+  -- initialize reset history
+  player:set_value("rpg_reset_history", "")
 
   player:add_item_with_id(ItypeId.new("system_interface"), 1)
+  mod.register_system_keybind()
 
   gapi.add_msg(
     MsgType.mixed,
     string.format(
-      gettext("%s initialized. Welcome %s of world IB-73758-R. Use your %s to access the %s."),
+      gettext("%s initialized. Welcome %s of world IB-73758-R. Use your %s to integrate the %s."),
       color_info(gettext("[System]")),
       color_highlight(gettext("[User]")),
       color_info(gettext("[System Interface]")),
@@ -242,29 +544,64 @@ mod.on_game_load = function()
     set_char_value(player, "rpg_assigned_int", 0)
     set_char_value(player, "rpg_assigned_per", 0)
     set_char_value(player, "rpg_level_scaling", 100)
+    set_char_value(player, "rpg_system_integrated", 0)
+    set_char_value(player, "rpg_shatter_stat_refund_done", 0)
+
+    -- initialize reset history for old saves
+    if player:get_value("rpg_reset_history") == "" then
+      player:set_value("rpg_reset_history", "")
+    end
 
     player:add_item_with_id(ItypeId.new("system_interface"), 1)
 
     gapi.add_msg(
       MsgType.mixed,
       string.format(
-        gettext("%s initialized. Welcome %s of world IB-73758-R. Use your %s to access the %s."),
+        gettext("%s initialized. Welcome %s of world IB-73758-R. Use your %s once to integrate, then access via keybind (default: %s)."),
         color_info(gettext("[System]")),
         color_highlight(gettext("[User]")),
         color_info(gettext("[System Interface]")),
-        color_info(gettext("[System]"))
+        color_highlight(DEFAULT_SYSTEM_MENU_KEY)
       )
     )
     gdebug.log_info("RPG System: Initialized on game load")
+    mod.register_system_keybind()
     return
   end
 
+  -- Ensure integration flag exists for old saves
+  if player:get_value("rpg_system_integrated") == "" then
+    local has_progress = level > 0
+      or get_char_value(player, "rpg_num_traits", 0) > 0
+      or get_char_value(player, "rpg_assigned_str", 0) > 0
+      or get_char_value(player, "rpg_assigned_dex", 0) > 0
+      or get_char_value(player, "rpg_assigned_int", 0) > 0
+      or get_char_value(player, "rpg_assigned_per", 0) > 0
+      or has_class(player)
+    set_char_value(player, "rpg_system_integrated", has_progress and 1 or 0)
+  end
+
+  -- Ensure reset history exists
+  if player:get_value("rpg_reset_history") == "" then
+    player:set_value("rpg_reset_history", "")
+  end
+
+  -- Ensure shatter refund guard exists
+  if player:get_value("rpg_shatter_stat_refund_done") == "" then
+    set_char_value(player, "rpg_shatter_stat_refund_done", 0)
+  end
+
+  mod.register_system_keybind()
   gdebug.log_info("RPG System: Loaded character at level " .. level)
 end
 
+----------------------------------------------------------------
+-- Combat / XP / periodic hooks
+----------------------------------------------------------------
+
 mod.on_monster_killed = function(params)
   local killer = params.killer
-  local monster = params.mon
+  local monster = params.monster or params.mon
 
   if not killer or not monster then return end
   if not killer:is_avatar() then return end
@@ -356,6 +693,9 @@ end
 
 mod.on_character_reset_stats = function(params)
   local character = params.character
+
+  enforce_soul_state(character)
+
   if not character then return end
   if not character:is_avatar() then return end
 
@@ -392,6 +732,9 @@ mod.on_every_5_minutes = function()
   local player = gapi.get_avatar()
   if not player then return end
 
+  -- Periodic enforcement so players cannot bypass UI checks
+  enforce_soul_state(player)
+
   local level = get_char_value(player, "rpg_level", 0)
   if level <= 0 then return end
 
@@ -418,13 +761,49 @@ mod.on_every_5_minutes = function()
   end
 end
 
+----------------------------------------------------------------
+-- Menus
+----------------------------------------------------------------
+
 mod.open_rpg_menu = function(params)
+
   local who = params.user
   local item = params.item
   local pos = params.pos
-  if not who:is_avatar() then return 0 end
+
+  if not who or not who:is_avatar() then
+    return 0
+  end
 
   local player = who
+  local integrated = get_char_value(player, "rpg_system_integrated", 0)
+
+  -- If using item after integration, block and inform
+  if item and integrated == 1 then
+    gapi.add_msg(
+      MsgType.info,
+      color_info(string.format(gettext("The [System] is already integrated with your being. Use your keybind (default: %s)."), DEFAULT_SYSTEM_MENU_KEY))
+    )
+    return 0
+  end
+
+  -- If not integrated yet, perform integration
+  if integrated == 0 then
+    if not item then
+      gapi.add_msg(MsgType.info, color_info(gettext("Use the [System Interface] item first to integrate the [System].")))
+      return 0
+    end
+    set_char_value(player, "rpg_system_integrated", 1)
+    mod.register_system_keybind()
+    gapi.add_msg(
+      MsgType.good,
+      color_good(string.format(gettext("[System] integration complete! You can now access the [System] via keybind (default: %s)."), DEFAULT_SYSTEM_MENU_KEY))
+    )
+    -- Item use only performs integration on first use.
+    return 0
+  end
+
+  enforce_soul_state(player)
   local keep_open = true
 
   while keep_open do
@@ -673,7 +1052,17 @@ mod.open_rpg_menu = function(params)
 end
 
 mod.manage_class_menu = function(player)
+  if not player then return end
+
+  -- Ensure enforcement is up-to-date whenever this menu is accessed
+  enforce_soul_state(player)
+
   local level = get_char_value(player, "rpg_level", 0)
+
+  -- Soul state flags (used to restrict selection but still allow abandon)
+  local soul_damaged = player:has_effect(EffectTypeId.new("damaged_soul"))
+  local soul_shattered = player:has_effect(EffectTypeId.new("soul_shattered"))
+  local soul_blocked = soul_damaged or soul_shattered
 
   local ui = UiList.new()
   ui:title(gettext("=== Select Class ==="))
@@ -682,135 +1071,284 @@ mod.manage_class_menu = function(player)
   local options = {}
   local index = 1
 
-  -- Show base classes if player doesn't have a class
-  if not has_class(player) then
+  --------------------------------------------------
+  -- Base Classes
+  --------------------------------------------------
+
+  if not has_class(player) and not soul_blocked then
     for id, mutation in pairs(MUTATIONS) do
       if mutation.type == "class" and not mutation.is_prestige then
+
         local mutation_id = mutation:get_mutation_id()
         local class_obj = mutation_id:obj()
-        local can_select, unmet = check_requirements(player, mutation, level)
+
+        local can_select, unmet, all_reqs = check_requirements(player, mutation, level)
 
         local display_text
-        if can_select then
-          display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
+        if #all_reqs > 0 then
+          if can_select then
+            display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
+              .. " - "
+              .. format_requirements_list(all_reqs, true)
+          else
+            display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
+              .. " - "
+              .. format_requirements_list(all_reqs, true)
+          end
         else
-          display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
-            .. " - "
-            .. format_requirements_list(unmet, true)
+          if can_select then
+            display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
+          else
+            display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
+          end
         end
 
-        table.insert(options, {
+        table.insert(options,{
           text = display_text,
           desc = class_obj:desc(),
           id = mutation_id,
           mutation = mutation,
-          can_select = can_select,
-          index = index,
+          can_select = can_select
         })
+
+        ui:add_w_desc(index, display_text, class_obj:desc())
         index = index + 1
       end
     end
   end
 
-  -- Show prestige classes if player has the appropriate base class
+  --------------------------------------------------
+  -- Prestige Classes
+  --------------------------------------------------
+
+  if not soul_blocked then
   for id, mutation in pairs(MUTATIONS) do
     if mutation.type == "class" and mutation.is_prestige then
-      local base_class_id = MUTATIONS[mutation.base_class]:get_mutation_id()
-      if player:has_trait(base_class_id) then
-        local mutation_id = mutation:get_mutation_id()
-        local class_obj = mutation_id:obj()
-        local can_select, unmet = check_requirements(player, mutation, level)
 
-        local display_text
-        if can_select then
-          display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
-            .. color_text(" (Prestige)", "yellow")
-        else
-          display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
-            .. " - "
-            .. format_requirements_list(unmet, true)
+      local base_key = mutation.base_class
+      if base_key and MUTATIONS[base_key] then
+
+        local base_id = MUTATIONS[base_key]:get_mutation_id()
+
+        if player:has_trait(base_id) then
+
+          local mutation_id = mutation:get_mutation_id()
+          local class_obj = mutation_id:obj()
+
+          if not player:has_trait(mutation_id) then
+
+            local can_select, unmet, all_reqs = check_requirements(player, mutation, level)
+
+            local display_text
+            if #all_reqs > 0 then
+              if can_select then
+                display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
+                  .. " - "
+                  .. format_requirements_list(all_reqs, true)
+              else
+                display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
+                  .. " - "
+                  .. format_requirements_list(all_reqs, true)
+              end
+            else
+              if can_select then
+                display_text = color_good(mutation.symbol .. " [" .. class_obj:name() .. "]")
+              else
+                display_text = color_text(mutation.symbol .. " [" .. class_obj:name() .. "]", "dark_gray")
+              end
+            end
+
+            table.insert(options,{
+              text = display_text,
+              desc = class_obj:desc(),
+              id = mutation_id,
+              mutation = mutation,
+              can_select = can_select
+            })
+
+            ui:add_w_desc(index, display_text, class_obj:desc())
+            index = index + 1
+          end
         end
-
-        table.insert(options, {
-          text = display_text,
-          desc = class_obj:desc(),
-          id = mutation_id,
-          mutation = mutation,
-          remove_first = base_class_id,
-          can_select = can_select,
-          index = index,
-        })
-        index = index + 1
       end
     end
   end
 
-  -- Show abandon option if player has a class
-  if has_class(player) then
-    table.insert(options, {
-      text = color_bad(gettext("✖ Abandon class")),
-      desc = color_warning(gettext("WARNING:")) .. " " .. gettext(
-        "Damages your soul for 3 days, with severe penalties."
-      ),
+  end -- close soul_blocked guard for prestige classes
+
+  --------------------------------------------------
+  -- Abandon Class (available even during damaged soul to allow escalation)
+  --------------------------------------------------
+
+  if has_class(player) and not soul_shattered then
+
+    table.insert(options,{
       action = "abandon",
-      can_select = true,
-      index = index,
+      can_select = true
     })
+
+    ui:add_w_desc(index,
+      color_bad(gettext("✖ Abandon class")),
+      color_warning(gettext("WARNING:")) .. " "
+      .. gettext("Damages your soul for 3 days, with severe penalties.")
+    )
+
     index = index + 1
   end
 
-  -- Back option
-  table.insert(options, {
-    text = color_text(gettext("← Back"), "light_gray"),
-    desc = gettext("Return to main menu"),
-    action = "back",
-    can_select = true,
-    index = index,
-  })
-
-  for i, opt in ipairs(options) do
-    ui:add_w_desc(opt.index, opt.text, opt.desc or "")
-    if ui.entries and ui.entries[i] then ui.entries[i].enable = opt.can_select end
+  -- If soul is blocked and no abandon option available, show a status message
+  if soul_blocked and #options == 0 then
+    if soul_shattered then
+      table.insert(options, { action = "info", can_select = false })
+      ui:add(index, color_bad(gettext("Your soul is shattered. Class management is unavailable.")))
+    else
+      table.insert(options, { action = "info", can_select = false })
+      ui:add(index, color_warning(gettext("Your soul is damaged. Class management is unavailable.")))
+    end
+    index = index + 1
   end
 
-  local choice_index = ui:query()
+  --------------------------------------------------
+  -- Back
+  --------------------------------------------------
 
-  if choice_index > 0 and choice_index <= #options then
-    local chosen = options[choice_index]
+  table.insert(options,{ action="back", can_select=true })
+  ui:add(index, color_text(gettext("← Back"), "light_gray"))
 
-    if not chosen.can_select then
-      gapi.add_msg(MsgType.warning, color_warning(gettext("You don't meet the requirements for this class.")))
-      return
-    end
+  --------------------------------------------------
+  -- Query
+  --------------------------------------------------
 
-    if chosen.action == "back" then
-      return
-    elseif chosen.action == "abandon" then
-      -- Remove all classes
-      for _, class_id in ipairs(ALL_CLASS_IDS) do
-        if player:has_trait(class_id) then player:remove_mutation(class_id, true) end
+  local choice = ui:query()
+
+  if choice <= 0 or choice > #options then
+    return
+  end
+
+  local chosen = options[choice]
+
+  --------------------------------------------------
+  -- Abandon
+  --------------------------------------------------
+
+  if chosen.action == "abandon" then
+
+    -- Remove classes immediately
+    for _, class_id in ipairs(ALL_CLASS_IDS) do
+      if player:has_trait(class_id) then
+        player:remove_mutation(class_id, true)
       end
+    end
 
-      player:add_effect(EffectTypeId.new("damaged_soul"), TimeDuration.from_hours(72))
+    -- Add this reset to history
+    add_reset_to_history(player, "class")
+
+    -- Count recent resets (within 30 days)
+    local recent_resets = count_recent_resets(player)
+
+    -- If cumulative resets >= 2, escalate to shattered
+    if recent_resets >= 2 then
+      escalate_to_shatter(player)
+      return
+    end
+
+    -- Otherwise apply damaged_soul
+    player:remove_effect(EffectTypeId.new("soul_shattered"))
+    player:remove_effect(EffectTypeId.new("damaged_soul"))
+    player:add_effect(EffectTypeId.new("damaged_soul"), TimeDuration.from_hours(72))
+
+    gapi.add_msg(
+      MsgType.bad,
+      color_bad(gettext("✖ You have abandoned your class! Your soul is damaged."))
+    )
+
+    return
+  end
+
+  if chosen.action == "back" then
+    return
+  end
+
+  --------------------------------------------------
+  -- FINAL VALIDATION (CRITICAL FIX)
+  --------------------------------------------------
+
+  if not chosen.can_select then
+    gapi.add_msg(
+      MsgType.warning,
+      color_warning(gettext("You do not meet the requirements for this class."))
+    )
+    return
+  end
+
+  local mutation = chosen.mutation
+
+  if mutation.is_prestige then
+
+    local base_key = mutation.base_class
+    if not base_key or not MUTATIONS[base_key] then
+      gapi.add_msg(MsgType.warning, "Invalid prestige configuration.")
+      return
+    end
+
+    local base_id = MUTATIONS[base_key]:get_mutation_id()
+
+    if not player:has_trait(base_id) then
       gapi.add_msg(
-        MsgType.bad,
-        color_bad(gettext("✖ You have abandoned your class!"))
-          .. " "
-          .. string.format(gettext("Your soul is %s for 3 days."), color_bad(gettext("damaged")))
+        MsgType.warning,
+        color_warning(gettext("You must have the base class first."))
       )
-    elseif chosen.id then
-      if chosen.remove_first then player:remove_mutation(chosen.remove_first, true) end
-      player:set_mutation(chosen.id)
-      local class_name = chosen.id:obj():name()
-      gapi.add_msg(
-        MsgType.good,
-        string.format(gettext("✓ You have chosen your path as %s!"), color_highlight(class_name))
-      )
+      return
     end
   end
+
+  local can_select_now, unmet = check_requirements(player, mutation, level)
+
+  if not can_select_now then
+    gapi.add_msg(
+      MsgType.warning,
+      color_warning(gettext("You do not meet the requirements for this class."))
+    )
+    return
+  end
+
+  --------------------------------------------------
+  -- Apply class
+  --------------------------------------------------
+
+  for _, class_id in ipairs(ALL_CLASS_IDS) do
+    if player:has_trait(class_id) then
+      player:remove_mutation(class_id, true)
+    end
+  end
+
+  player:set_mutation(chosen.id)
+
+  gapi.add_msg(
+    MsgType.good,
+    string.format(
+      gettext("✓ You have chosen your path as %s!"),
+      color_highlight(chosen.id:obj():name())
+    )
+  )
+
 end
 
 mod.manage_traits_menu = function(player)
+  if not player then return end
+
+  -- Ensure enforcement is up-to-date whenever this menu is accessed
+  enforce_soul_state(player)
+
+  --------------------------------------------------
+  -- Soul damage / shattered protection
+  --------------------------------------------------
+
+  -- Soul state flags (used to restrict selection but still allow reset)
+  local soul_damaged = player:has_effect(EffectTypeId.new("damaged_soul"))
+  local soul_shattered = player:has_effect(EffectTypeId.new("soul_shattered"))
+  local soul_blocked = soul_damaged or soul_shattered
+
   local level = get_char_value(player, "rpg_level", 0)
   local num_traits = get_char_value(player, "rpg_num_traits", 0)
   local max_traits = get_char_value(player, "rpg_max_traits", 1)
@@ -823,66 +1361,86 @@ mod.manage_traits_menu = function(player)
   local traits = {}
   local index = 1
 
-  -- Loop through all trait mutations
+  local trait_candidates = {}
   for id, mutation in pairs(MUTATIONS) do
     if mutation.type == "trait" then
       local trait_id = mutation:get_mutation_id()
-      local already_has = player:has_trait(trait_id)
       local trait_obj = trait_id:obj()
-      local trait_name = trait_obj:name()
-      local trait_desc = trait_obj:desc()
+      local req_level = 0
+      if mutation.requirements and mutation.requirements.level then
+        req_level = mutation.requirements.level
+      end
 
-      local can_select_reqs, unmet = check_requirements(player, mutation, level)
-      -- Can only select if you have available slots, meet requirements, and don't already have it
-      local can_select = has_available_slots and not already_has and can_select_reqs
+      table.insert(trait_candidates, {
+        mutation = mutation,
+        trait_id = trait_id,
+        trait_obj = trait_obj,
+        req_level = req_level,
+        sort_name = string.lower(tostring(trait_obj:name() or "")),
+      })
+    end
+  end
+
+  table.sort(trait_candidates, function(a, b)
+    if a.req_level ~= b.req_level then
+      return a.req_level < b.req_level
+    end
+    return a.sort_name < b.sort_name
+  end)
+
+  for _, candidate in ipairs(trait_candidates) do
+      local mutation = candidate.mutation
+      local trait_id = candidate.trait_id
+      local already_has = player:has_trait(trait_id)
+      local trait_obj = candidate.trait_obj
+
+      local can_select_reqs, unmet, all_reqs = check_requirements(player, mutation, level)
+      local can_select = has_available_slots and not already_has and can_select_reqs and not soul_blocked
 
       local display_name
+
       if already_has then
-        display_name = color_text("✓ " .. trait_name, "dark_gray")
-          .. color_text(" (" .. gettext("Owned") .. ")", "dark_gray")
-      elseif not has_available_slots then
-        display_name = color_text("◆ " .. trait_name, "dark_gray")
-          .. color_text(" (" .. gettext("No slots available") .. ")", "dark_gray")
-      elseif not can_select_reqs then
-        display_name = color_text("◆ " .. trait_name, "dark_gray") .. " - " .. format_requirements_list(unmet, false)
+        display_name = color_text("✓ " .. trait_obj:name(), "dark_gray")
+      elseif #all_reqs > 0 then
+        if can_select_reqs then
+          display_name = color_good("◆ " .. trait_obj:name()) .. " - " .. format_requirements_list(all_reqs, true)
+        else
+          display_name = color_text("◆ " .. trait_obj:name(), "dark_gray") .. " - " .. format_requirements_list(all_reqs, true)
+        end
       else
-        display_name = color_good("◆ " .. trait_name)
+        display_name = color_good("◆ " .. trait_obj:name())
       end
 
       table.insert(traits, {
         id = trait_id,
         name = display_name,
-        desc = trait_desc,
+        desc = trait_obj:desc(),
         can_select = can_select,
         index = index,
       })
+
       index = index + 1
-    end
   end
 
+  --------------------------------------------------
   -- Reset Traits option
+  --------------------------------------------------
+
   local current_traits = get_current_traits(player)
-  local can_reset = #current_traits > 0
-  local reset_text
-  if can_reset then
-    reset_text = color_text(gettext("✖ Reset Traits"), "red")
-  else
-    reset_text = color_text(gettext("✖ Reset Traits"), "dark_gray")
-      .. color_text(" (" .. gettext("No traits to reset") .. ")", "dark_gray")
+
+  -- Reset is available even with damaged soul (to allow escalation to shatter)
+  -- but NOT available during shattered soul
+  if not soul_shattered then
+    table.insert(traits, {
+      name = color_text(gettext("✖ Reset Traits"), "red"),
+      desc = gettext("Remove all traits and damage your soul for 3 days."),
+      action = "reset",
+      can_select = #current_traits > 0,
+      index = index,
+    })
+    index = index + 1
   end
 
-  table.insert(traits, {
-    name = reset_text,
-    desc = gettext(
-      "Remove all traits and damage your soul for 3 days, with severe penalties. You will keep your trait slots."
-    ),
-    action = "reset",
-    can_select = can_reset,
-    index = index,
-  })
-  index = index + 1
-
-  -- Back option
   table.insert(traits, {
     name = color_text(gettext("← Back"), "light_gray"),
     desc = gettext("Return to main menu"),
@@ -893,49 +1451,94 @@ mod.manage_traits_menu = function(player)
 
   for i, trait in ipairs(traits) do
     ui:add_w_desc(trait.index, trait.name, trait.desc or "")
-    if ui.entries and ui.entries[i] then ui.entries[i].enable = trait.can_select end
+    -- Don't disable entries, allow viewing all trait descriptions
   end
 
   local choice_index = ui:query()
 
-  if choice_index > 0 and choice_index <= #traits then
-    local chosen = traits[choice_index]
+  if choice_index <= 0 or choice_index > #traits then
+    return
+  end
 
+  local chosen = traits[choice_index]
+
+  if chosen.action == "back" then
+    return
+  end
+
+  --------------------------------------------------
+  -- Reset Traits logic with shattered soul mechanic
+  --------------------------------------------------
+
+  if chosen.action == "reset" then
+
+    for _, trait_id in ipairs(ALL_TRAIT_IDS) do
+      if player:has_trait(trait_id) then
+        player:remove_mutation(trait_id, true)
+      end
+    end
+
+    set_char_value(player, "rpg_num_traits", 0)
+
+    -- Add this reset to history
+    add_reset_to_history(player, "trait")
+
+    -- Count recent resets (within 30 days)
+    local recent_resets = count_recent_resets(player)
+
+    -- If cumulative resets >= 2, escalate to shattered
+    if recent_resets >= 2 then
+      escalate_to_shatter(player)
+      return
+    end
+
+    -- Otherwise apply damaged_soul
+    player:remove_effect(EffectTypeId.new("soul_shattered"))
+    player:remove_effect(EffectTypeId.new("damaged_soul"))
+    player:add_effect(EffectTypeId.new("damaged_soul"), TimeDuration.from_hours(72))
+
+    gapi.add_msg(
+      MsgType.bad,
+      color_bad(gettext("✖ You have abandoned your traits! Your soul is damaged."))
+    )
+
+    return
+  end
+
+  --------------------------------------------------
+  -- Add trait normally
+  --------------------------------------------------
+
+  if chosen.id then
+    -- Block selection if not eligible
     if not chosen.can_select then
-      if chosen.id and player:has_trait(chosen.id) then
-        gapi.add_msg(MsgType.warning, color_warning(gettext("You already have this trait.")))
+      if not has_available_slots and not player:has_trait(chosen.id) then
+        gapi.add_msg(
+          MsgType.warning,
+          color_warning(gettext("You have no available trait slots."))
+        )
       else
-        gapi.add_msg(MsgType.warning, color_warning(gettext("You don't meet the requirements for this trait.")))
+        gapi.add_msg(
+          MsgType.warning,
+          color_warning(gettext("You cannot select this trait. Check requirements."))
+        )
       end
       return
     end
 
-    if chosen.action == "back" then
-      return
-    elseif chosen.action == "reset" then
-      -- Remove all traits
-      for _, trait_id in ipairs(ALL_TRAIT_IDS) do
-        if player:has_trait(trait_id) then player:remove_mutation(trait_id, true) end
-      end
+    player:set_mutation(chosen.id)
+    set_char_value(player, "rpg_num_traits", num_traits + 1)
 
-      -- Reset trait counter but keep max traits (slots)
-      set_char_value(player, "rpg_num_traits", 0)
-
-      player:add_effect(EffectTypeId.new("damaged_soul"), TimeDuration.from_hours(72))
-      gapi.add_msg(
-        MsgType.bad,
-        color_bad(gettext("✖ You have abandoned your traits!"))
-          .. " "
-          .. string.format(gettext("Your soul is %s for 3 days."), color_bad(gettext("damaged")))
-      )
-    elseif chosen.id then
-      player:set_mutation(chosen.id)
-      set_char_value(player, "rpg_num_traits", num_traits + 1)
-      local trait_name = chosen.id:obj():name()
-      gapi.add_msg(MsgType.good, string.format(gettext("✓ You have gained %s!"), color_highlight(trait_name)))
-    end
+    gapi.add_msg(
+      MsgType.good,
+      string.format(gettext("✓ You have gained %s!"), color_highlight(chosen.id:obj():name()))
+    )
   end
 end
+
+----------------------------------------------------------------
+-- Stats menu / help / misc
+----------------------------------------------------------------
 
 mod.assign_stats_menu = function(player)
   local stat_points = get_char_value(player, "rpg_stat_points", 0)
@@ -1025,6 +1628,11 @@ mod.show_help_menu = function(player)
       action = "about",
     },
     {
+      name = gettext("Class Tree"),
+      desc = gettext("View the auto-generated class hierarchy"),
+      action = "tree",
+    },
+    {
       name = gettext("Adjust Level Scaling"),
       desc = gettext("Fine-tune power scaling for balance"),
       action = "scaling",
@@ -1049,6 +1657,8 @@ mod.show_help_menu = function(player)
       return
     elseif chosen.action == "about" then
       mod.show_about_screen(player)
+    elseif chosen.action == "tree" then
+      mod.show_class_tree_screen(player)
     elseif chosen.action == "scaling" then
       mod.adjust_level_scaling(player)
     end
@@ -1068,37 +1678,61 @@ mod.show_about_screen = function(player)
     )
     .. "\n\n"
 
+  help_text = help_text .. color_highlight(gettext("OVERVIEW")) .. "\n"
   help_text = help_text
-    .. string.format(
-      gettext(
-        "Welcome to the %s! You, among all inhabitants of world IB-73758-R, have been blessed with a chance at greatness for your great deeds doing %s."
-      ),
-      color_info(gettext("[System]")),
-      color_warning(gettext("[REASON NOT FOUND]"))
-    )
-    .. "\n"
-  help_text = help_text .. gettext("Admire below the power made available:") .. "\n\n"
-
-  help_text = help_text .. color_highlight(gettext("PROGRESSION")) .. "\n"
-  help_text = help_text .. string.format(gettext("• Level 10: Prestige Class unlocks")) .. "\n"
-  help_text = help_text .. string.format(gettext("• +1 stat point per %d levels"), LEVELS_PER_STAT_POINT) .. "\n"
-  help_text = help_text .. string.format(gettext("• +1 trait slot per %d levels"), LEVELS_PER_TRAIT_SLOT) .. "\n\n"
-
-  help_text = help_text .. color_highlight(gettext("BALANCE")) .. "\n"
-  help_text = help_text .. gettext("~25 point value (much less early, more late)") .. "\n"
-  help_text = help_text
-    .. color_warning("⚠")
-    .. " "
-    .. gettext("Not meant to be used with Stats through Kills")
+    .. gettext("Gain experience from killing monsters, level up, choose classes, unlock traits, and assign stat points to grow stronger.")
     .. "\n\n"
 
-  help_text = help_text .. color_highlight(gettext("PRESTIGE PATHS")) .. "\n"
-  help_text = help_text .. gettext("Warrior") .. " → " .. gettext("Berserker") .. " / " .. gettext("Guardian") .. "\n"
-  help_text = help_text .. gettext("Mage") .. " → " .. gettext("Mystic") .. " / " .. gettext("Scholar") .. "\n"
-  help_text = help_text .. gettext("Rogue") .. " → " .. gettext("Acrobat") .. " / " .. gettext("Assassin") .. "\n"
-  help_text = help_text .. gettext("Scout") .. " → " .. gettext("Ranger") .. " / " .. gettext("Craftsman") .. "\n"
+  help_text = help_text .. color_highlight(gettext("EXPERIENCE & LEVELING")) .. "\n"
+  help_text = help_text .. gettext("• Kill monsters to gain XP (based on their HP)") .. "\n"
+  help_text = help_text .. gettext("• Level cap: 40 (progression slows significantly after level 10)") .. "\n"
+  help_text = help_text .. gettext("• XP formula: XP = 2.2387 × level^3.65") .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("PROGRESSION REWARDS")) .. "\n"
+  help_text = help_text .. string.format(gettext("• +1 stat point every %d levels"), LEVELS_PER_STAT_POINT) .. "\n"
+  help_text = help_text .. string.format(gettext("• +1 trait slot every %d levels"), LEVELS_PER_TRAIT_SLOT) .. "\n"
+  help_text = help_text .. gettext("• Class progression is branch-based and can be extended by other mods") .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("TRAITS")) .. "\n"
+  help_text = help_text .. gettext("Unlock powerful passive abilities as you level.") .. "\n"
+  help_text = help_text .. gettext("Each trait has stat or skill requirements you must meet.") .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("STAT POINTS")) .. "\n"
+  help_text = help_text .. gettext("Assign earned stat points to permanently increase STR, DEX, INT, or PER.") .. "\n"
+  help_text = help_text .. gettext("These bonuses are independent of class scaling.") .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("SOUL DAMAGE SYSTEM")) .. "\n"
+  help_text = help_text .. color_warning("⚠ ") .. gettext("Abandoning classes or resetting traits damages your soul.") .. "\n"
+  help_text = help_text .. gettext("• First reset: ") .. color_bad(gettext("Damaged Soul"))
+    .. gettext(" (-4 all stats, 3 days)") .. "\n"
+  help_text = help_text .. gettext("• Cumulative resets (>=2 in 30 days): ") .. color_bad(gettext("Shattered Soul"))
+    .. gettext(" (-10 all stats, 6 days)") .. "\n"
+  help_text = help_text .. gettext("• Shattered Soul refunds all assigned stat points for reallocation") .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("SYSTEM ACCESS")) .. "\n"
+  help_text = help_text .. gettext("Use [System Interface] once to integrate with your character.") .. "\n"
+  help_text = help_text
+    .. string.format(gettext("After integration, use your [System] keybind (default: %s)."), DEFAULT_SYSTEM_MENU_KEY)
+    .. "\n\n"
+
+  help_text = help_text .. color_highlight(gettext("BALANCE NOTE")) .. "\n"
+  help_text = help_text .. gettext("~25 character creation point value (much less early game, more late game).") .. "\n"
+  help_text = help_text .. color_warning("⚠ ") .. gettext("Not designed for use with 'Stats through Kills' mod.") .. "\n"
 
   ui:text(help_text)
+  ui:add(1, color_text(gettext("← Back"), "light_gray"))
+
+  ui:query()
+end
+
+mod.show_class_tree_screen = function(player)
+  local ui = UiList.new()
+  ui:title(gettext("=== Class Tree (Auto-Generated) ==="))
+
+  local tree_text = build_class_tree_text() .. "\n\n"
+  tree_text = tree_text .. color_text(gettext("Class progression is branch-based and can be extended by other mods."), "light_gray") .. "\n"
+
+  ui:text(tree_text)
   ui:add(1, color_text(gettext("← Back"), "light_gray"))
 
   ui:query()

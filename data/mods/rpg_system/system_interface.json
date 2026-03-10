@@ -4,7 +4,7 @@
     "type": "GENERIC",
     "category": "tools",
     "name": { "str": "[System Interface]" },
-    "description": "A mysterious interface that allows you to access the [System]. It materialized in your possession when the System initialized.",
+    "description": "A mysterious interface that allows you to access the [System]. It materialized in your possession when the System initialized. Use it once to integrate the System with your being. After integration, this item is no longer needed and you can access the System through your keybindings.",
     "weight": "0 g",
     "volume": "0 ml",
     "price": 0,
@@ -43,6 +43,36 @@
       "pain_max": [ 2 ],
       "pain_max_val": [ 100 ],
       "morale": [ -20 ]
+    }
+  },
+  {
+    "id": "morale_shattered_soul",
+    "type": "morale_type",
+    "text": "Your soul has been shattered into pieces",
+    "permanent": true
+  },
+  {
+    "type": "effect_type",
+    "id": "soul_shattered",
+    "name": [ "Shattered Soul" ],
+    "desc": [
+      "Your soul has been shattered by repeated abandonment of your paths in a short period. You are severely weakened in body and spirit. All body parts are gravely injured."
+    ],
+    "apply_message": "Your soul SHATTERS! Your body crumbles along with it!",
+    "remove_message": "Your shattered soul slowly begins to mend.",
+    "morale": "morale_shattered_soul",
+    "rating": "bad",
+    "max_duration": "6 d",
+    "base_mods": {
+      "str_mod": [ -10 ],
+      "dex_mod": [ -10 ],
+      "int_mod": [ -10 ],
+      "per_mod": [ -10 ],
+      "speed_mod": [ -40 ],
+      "pain_amount": [ 5 ],
+      "pain_max": [ 5 ],
+      "pain_max_val": [ 100 ],
+      "morale": [ -40 ]
     }
   },
   {

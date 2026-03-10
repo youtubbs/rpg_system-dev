@@ -2,6 +2,6 @@
   {
     "type": "item_action",
     "id": "RPG_SYSTEM_MENU",
-    "name": { "str": "Access the [System]" }
+    "name": { "str": "Integrate with the [System]" }
   }
 ]
