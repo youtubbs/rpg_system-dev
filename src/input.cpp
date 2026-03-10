@@ -27,6 +27,7 @@
 #include "output.h"
 #include "path_info.h"
 #include "popup.h"
+#include "runtime_keybinding.h"
 #include "string_formatter.h"
 #include "string_input_popup.h"
 #include "string_utils.h"
@@ -517,6 +518,15 @@ const action_attributes &input_manager::get_action_attributes(
                 return action->second;
             }
         }
+
+        if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_id, context );
+            runtime_action != nullptr ) {
+            if( overwrites_default ) {
+                *overwrites_default = true;
+            }
+
+            return runtime_action->attributes;
+        }
     }
 
     // If not, we use the default binding.
@@ -526,12 +536,18 @@ const action_attributes &input_manager::get_action_attributes(
 
     t_actions &default_action_context = action_contexts[default_context_id];
     const t_actions::const_iterator default_action = default_action_context.find( action_id );
-    if( default_action == default_action_context.end() ) {
-        // A new action is created in the event that the requested action is
-        // not in the keybindings configuration e.g. the entry is missing.
-        default_action_context[action_id].name = get_default_action_name( action_id );
+    if( default_action != default_action_context.end() ) {
+        return default_action->second;
     }
 
+    if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_id,
+                                     default_context_id ); runtime_action != nullptr ) {
+        return runtime_action->attributes;
+    }
+
+    // A new action is created in the event that the requested action is
+    // not in the keybindings configuration e.g. the entry is missing.
+    default_action_context[action_id].name = get_default_action_name( action_id );
     return default_action_context[action_id];
 }
 
@@ -546,9 +562,54 @@ translation input_manager::get_default_action_name( const std::string &action_id
     const t_actions::const_iterator default_action = default_action_context->second.find( action_id );
     if( default_action != default_action_context->second.end() ) {
         return default_action->second.name;
-    } else {
-        return no_translation( action_id );
     }
+
+    if( const auto *runtime_action = cata::runtime_keybindings::find_any_action( action_id );
+        runtime_action != nullptr ) {
+        return runtime_action->attributes.name;
+    }
+
+    return no_translation( action_id );
+}
+
+auto input_manager::find_conflicts_with_event( const input_event &event,
+        const std::string &context, const std::string &exclude_action_id ) const -> std::string
+{
+    auto conflicting_actions = std::vector<std::string> {};
+
+    // Check static actions in the requested context
+    const auto context_it = action_contexts.find( context );
+    if( context_it != action_contexts.end() ) {
+        for( const auto &[action_id, attributes] : context_it->second ) {
+            if( action_id == exclude_action_id ) {
+                continue;
+            }
+            const auto &events = attributes.input_events;
+            if( std::find( events.begin(), events.end(), event ) != events.end() ) {
+                conflicting_actions.push_back( attributes.name.translated() );
+            }
+        }
+    }
+
+    // Check runtime actions in the requested context
+    const auto runtime_action_ids = cata::runtime_keybindings::get_registered_action_ids( context );
+    for( const auto &action_id : runtime_action_ids ) {
+        if( action_id == exclude_action_id ) {
+            continue;
+        }
+        if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_id, context ) ) {
+            const auto &events = runtime_action->attributes.input_events;
+            if( std::find( events.begin(), events.end(), event ) != events.end() ) {
+                conflicting_actions.push_back( runtime_action->attributes.name.translated() );
+            }
+        }
+    }
+
+    // Format as comma-separated string like get_conflicts() does
+    return enumerate_as_string( conflicting_actions.begin(), conflicting_actions.end(),
+    []( const std::string & name ) {
+        return name;
+    } );
 }
 
 input_manager::t_input_event_list &input_manager::get_or_create_event_list(
@@ -592,8 +653,39 @@ void input_manager::remove_input_for_action(
                     action->second.input_events.clear();
                 }
             }
+            return;
         }
     }
+
+    if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_descriptor,
+                                     context ); runtime_action != nullptr ) {
+        action_attributes &attributes = action_contexts[context][action_descriptor];
+        attributes.name = get_default_action_name( action_descriptor );
+        attributes.input_events.clear();
+        attributes.is_user_created = false;
+    }
+}
+
+void input_manager::clear_input_for_action(
+    const std::string &action_descriptor, const std::string &context, const input_event &event )
+{
+    t_actions &actions = action_contexts[context];
+    auto action = actions.find( action_descriptor );
+    if( action == actions.end() ) {
+        if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_descriptor,
+                                         context ); runtime_action != nullptr ) {
+            action_attributes &attributes = actions[action_descriptor];
+            attributes.name = get_default_action_name( action_descriptor );
+            attributes.input_events = runtime_action->attributes.input_events;
+            attributes.is_user_created = false;
+            action = actions.find( action_descriptor );
+        } else {
+            return;
+        }
+    }
+
+    std::vector<input_event> &events = action->second.input_events;
+    events.erase( std::remove( events.begin(), events.end(), event ), events.end() );
 }
 
 void input_manager::add_input_for_action(
@@ -625,24 +717,10 @@ std::string input_context::get_conflicts( const input_event &event ) const
 
 void input_context::clear_conflicting_keybindings( const input_event &event )
 {
-    // The default context is always included to cover cases where the same
-    // keybinding exists for the same action in both the global and local
-    // contexts.
-    input_manager::t_actions &default_actions = inp_mngr.action_contexts[default_context_id];
-    input_manager::t_actions &category_actions = inp_mngr.action_contexts[category];
-
-    for( std::vector<std::string>::const_iterator registered_action = registered_actions.begin();
-         registered_action != registered_actions.end();
-         ++registered_action ) {
-        input_manager::t_actions::iterator default_action = default_actions.find( *registered_action );
-        input_manager::t_actions::iterator category_action = category_actions.find( *registered_action );
-        if( default_action != default_actions.end() ) {
-            std::vector<input_event> &events = default_action->second.input_events;
-            events.erase( std::remove( events.begin(), events.end(), event ), events.end() );
-        }
-        if( category_action != category_actions.end() ) {
-            std::vector<input_event> &events = category_action->second.input_events;
-            events.erase( std::remove( events.begin(), events.end(), event ), events.end() );
+    for( const auto &registered_action : registered_actions ) {
+        inp_mngr.clear_input_for_action( registered_action, default_context_id, event );
+        if( category != default_context_id ) {
+            inp_mngr.clear_input_for_action( registered_action, category, event );
         }
     }
 }
@@ -1476,13 +1554,31 @@ std::string input_context::get_action_name( const std::string &action_id ) const
         return action_name_override->second.translated();
     }
 
-    // 2) Check if the hotkey has a name
+    // 2) Prefer runtime action names in the active context when available.
+    if( const auto *runtime_action = cata::runtime_keybindings::find_action( action_id,
+                                     category ); runtime_action != nullptr ) {
+        if( !runtime_action->attributes.name.empty() ) {
+            return runtime_action->attributes.name.translated();
+        }
+    }
+
+    // 3) For contexts that fall back to default, prefer runtime default names too.
+    if( category != default_context_id ) {
+        if( const auto *runtime_default_action = cata::runtime_keybindings::find_action( action_id,
+                default_context_id ); runtime_default_action != nullptr ) {
+            if( !runtime_default_action->attributes.name.empty() ) {
+                return runtime_default_action->attributes.name.translated();
+            }
+        }
+    }
+
+    // 4) Check if the hotkey has a name
     const action_attributes &attributes = inp_mngr.get_action_attributes( action_id, category );
     if( !attributes.name.empty() ) {
         return attributes.name.translated();
     }
 
-    // 3) If the hotkey has no name, the user has created a local hotkey in
+    // 5) If the hotkey has no name, the user has created a local hotkey in
     // this context that is masking the global hotkey. Fallback to the global
     // hotkey's name.
     const action_attributes &default_attributes = inp_mngr.get_action_attributes( action_id,
@@ -1491,7 +1587,7 @@ std::string input_context::get_action_name( const std::string &action_id ) const
         return default_attributes.name.translated();
     }
 
-    // 4) Unable to find suitable name. Keybindings configuration likely borked
+    // 6) Unable to find suitable name. Keybindings configuration likely borked
     return action_id;
 }
 

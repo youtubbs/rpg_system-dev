@@ -892,7 +892,11 @@
     "dodge_modifier": 2,
     "movecost_modifier": 0.90,
     "attackcost_modifier": 0.90,
-    "encumbrance_always": [ [ "ALL", 4 ] ]
+    "encumbrance_always": [
+      [ "torso", 4 ], [ "head", 4 ], [ "eyes", 4 ], [ "mouth", 4 ],
+      [ "arm_l", 4 ], [ "arm_r", 4 ], [ "hand_l", 4 ], [ "hand_r", 4 ],
+      [ "leg_l", 4 ], [ "leg_r", 4 ], [ "foot_l", 4 ], [ "foot_r", 4 ]
+    ]
   },
   {
     "type": "mutation",

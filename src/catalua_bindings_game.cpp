@@ -143,6 +143,27 @@ void cata::detail::reg_game_api( sol::state &lua )
         } );
     } );
 
+    DOC( "Register a Lua-defined action menu entry that also participates in the action menu keybinding help." );
+    luna::set_fx( lib, "register_action_menu_action", []( sol::table opts ) -> void {
+        auto id = opts.get_or( "id", std::string{} );
+        auto name = opts.get_or( "name", std::string{} );
+        auto category_id = opts.get_or( "category", std::string{ "misc" } );
+        auto hotkey = opts.get<sol::optional<std::string>>( "hotkey" );
+        auto hotkey_value = std::optional<std::string>{};
+        if( hotkey )
+        {
+            hotkey_value = std::move( *hotkey );
+        }
+        auto fn = opts.get_or<sol::protected_function>( "fn", sol::lua_nil );
+        cata::lua_action_menu::register_entry( {
+            .id = std::move( id ),
+            .name = std::move( name ),
+            .category_id = std::move( category_id ),
+            .hotkey = std::move( hotkey_value ),
+            .fn = std::move( fn ),
+        } );
+    } );
+
     DOC( "Spawns a new item. Same as Item::spawn " );
     luna::set_fx( lib, "create_item", []( const itype_id & itype, int count ) -> detached_ptr<item> {
         return item::spawn( itype, calendar::turn, count );

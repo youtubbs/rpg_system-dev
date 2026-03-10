@@ -69,7 +69,7 @@ local XP_EXPONENT = 3.65
 -- Progression Constants
 local LEVELS_PER_STAT_POINT = 2
 local LEVELS_PER_TRAIT_SLOT = 5
-local DEFAULT_SYSTEM_MENU_KEY = "{"
+local DEFAULT_SYSTEM_MENU_KEY = "END"
 
 -- Function to register a new mutation with the RPG system (can be called by other mods)
 -- config: table with mutation properties (id, type, symbol, requirements, stat_bonuses, etc.)
@@ -288,8 +288,18 @@ mod.register_system_keybind = function()
 
   local ok = false
 
-  -- BN PR #7848 schema (https://github.com/cataclysmbn/Cataclysm-BN/pull/7848): register a Lua action-menu entry with bindable hotkey.
-  if gapi.register_action_menu_entry then
+  -- Register through the keybind-aware action-menu API when available.
+  if gapi.register_action_menu_action then
+    ok = pcall(function()
+      gapi.register_action_menu_action({
+        id = "rpg_system:misc_open_menu",
+        name = "Open [System] Menu",
+        category = "misc",
+        hotkey = DEFAULT_SYSTEM_MENU_KEY,
+        fn = open_system_from_action,
+      })
+    end)
+  elseif gapi.register_action_menu_entry then
     ok = pcall(function()
       gapi.register_action_menu_entry({
         id = "rpg_system:misc_open_menu",

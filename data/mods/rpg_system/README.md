@@ -61,7 +61,7 @@ Abandoning your class or resetting traits has consequences:
 - **Cumulative resets**: If you reset more than 2 times within a 30-day period, your soul will **shatter**
 - **Shattered Soul**: Severe penalty (-10 all stats, -40% speed, all body parts damaged to 1 HP, 6 days duration)
   - **Special**: Shattering refunds all assigned stat points, allowing complete reallocation
-  - This is the only way to reset assigned stat points
+  - This is now the only way to reset assigned stat points
 
 Plan your builds carefully!
 
@@ -153,6 +153,10 @@ If you want to add a new mod, you can call `add_mutation` from your own mod to r
 
 ### TODOs
 
-Have more interesting and dynamic stats and traits. They are all currently implemented either using `mod_` functions in lua, or using static mutation JSON bonuses. We could definitely add some more BombasticPerk style traits. Also, probably much of this is unbalanced.
+I am not putting these in any particular order, nor are these ideas set-in-place. I'm just literally putting my stream of consciousness in this document.
 
-Anyone who is interested should feel free to make changes!
+1. balance the exact numbers of traits and classes to make them overall more balanced
+2. add functionality such that critters and NPCs also have a leveling system. this is the big plan to balance the rpg system because currently it's too easy to snowball in power. Also, ideally the way xp is gained should transition away from purely health and should be a combination of considering level, HP, and other stats in combination with eachother to decide how much xp is granted. cuz theres a lot of really difficult creatures to deal with that end up granting like 2 xp per kill. 
+3. following up from previous todo, need to deal with situations in which critters choose a 'non-combat' class/trait like scholar/sage/etc. i was throwing the idea around of converting critters into npcs after enough accumulated levels + intelligence + skills? it seems actually feasible to do this because there isn't any data loss to convert them to npcs i dont think? It would also add a bunch of facinating options for other mods, too. 
+4. add more difficulty options. some ppl would just wanna use the rpg system to supplement their game as an alternative to stats through kills and others would want it to actually change their entire gameplay system. plan is to add different distributions of levels of NPCs/critters to choose from (e.g. choose low chance that they spawn with higher levels, weighted by their evaluated 'power', versus a hell mode where levels are evenly distributed across range 1-40 no matter the creature). Maybe higher levels are locked behind a higher difficulty?
+5. add more onto the 'soul' mechanic. maybe there can be mobs that can damage your soul or something? maybe damaged souls should have penalties like xp loss? maybe under a lot of unhappiness or pain you have the chance of damaging your soul as a way to prevent character abuse?

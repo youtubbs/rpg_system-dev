@@ -56,6 +56,7 @@
 #include "iuse.h"
 #include "lightmap.h"
 #include "line.h"
+#include "lua_action_menu.h"
 #include "magic.h"
 #include "make_static.h"
 #include "map.h"
@@ -1673,6 +1674,10 @@ bool game::handle_action()
     }
 
     if( act == ACTION_NULL ) {
+        if( !action.empty() && cata::lua_action_menu::run_action( action ) ) {
+            return false;
+        }
+
         const input_event &&evt = ctxt.get_raw_input();
         if( !evt.sequence.empty() ) {
             const int ch = evt.get_first_input();

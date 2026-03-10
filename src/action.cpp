@@ -766,6 +766,7 @@ auto make_register_categories( std::vector<uilist_entry> &entries,
 action_id handle_action_menu()
 {
     const input_context ctxt = get_default_mode_input_context();
+    const input_context lua_action_ctxt( cata::lua_action_menu::input_context_id() );
 
     // Calculate weightings for the various actions to give the player suggestions
     // Weight >= 200: Special action only available right now
@@ -846,6 +847,8 @@ action_id handle_action_menu()
         uilist_entry *entry;
         std::map<int, std::string> categories_by_int;
         auto lua_entries_by_int = std::map<int, std::string> {};
+        auto lua_entries_by_action = std::map<std::string, std::string> {};
+        auto lua_additional_actions = std::vector<std::pair<std::string, translation>> {};
         int last_category = NUM_ACTIONS + 1;
         auto last_lua_entry = 3 * NUM_ACTIONS;
 
@@ -865,7 +868,11 @@ action_id handle_action_menu()
             auto filtered = lua_entries | std::views::filter( matches_category );
             std::ranges::for_each( filtered, [&]( const cata::lua_action_menu::entry & menu_entry ) {
                 lua_entries_by_int[last_lua_entry] = menu_entry.id;
-                entries.emplace_back( last_lua_entry, true, menu_entry.hotkey, menu_entry.name );
+                lua_entries_by_action[menu_entry.action_id] = menu_entry.id;
+                lua_additional_actions.emplace_back( menu_entry.action_id, no_translation( menu_entry.name ) );
+                const auto bound_hotkey = lua_action_ctxt.key_bound_to( menu_entry.action_id );
+                const auto hotkey = bound_hotkey.empty() ? 0 : bound_hotkey.front();
+                entries.emplace_back( last_lua_entry, true, hotkey, menu_entry.name );
                 last_lua_entry++;
             } );
         };
@@ -1008,12 +1015,21 @@ action_id handle_action_menu()
 
         uilist smenu;
         smenu.settext( title );
+        smenu.input_category = cata::lua_action_menu::input_context_id();
+        smenu.additional_actions = lua_additional_actions;
+        smenu.allow_additional = true;
         smenu.entries = entries;
         smenu.query();
         const int selection = smenu.ret;
 
         if( selection < 0 || selection == NUM_ACTIONS ) {
             return ACTION_NULL;
+        } else if( selection == UILIST_ADDITIONAL ) {
+            if( const auto lua_entry = lua_entries_by_action.find( smenu.ret_act );
+                lua_entry != lua_entries_by_action.end() ) {
+                cata::lua_action_menu::run_entry( lua_entry->second );
+                return ACTION_NULL;
+            }
         } else if( selection == 2 * NUM_ACTIONS ) {
             if( category_id != "back" ) {
                 category_id = "back";

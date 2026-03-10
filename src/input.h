@@ -305,6 +305,20 @@ class input_manager
             return input_timeout;
         }
 
+        /**
+         * Find all actions in a given context that use a specific input event.
+         *
+         * @param event The input event to check for conflicts.
+         * @param context The context to check in. Defaults to "default".
+         * @param exclude_action_id Optional action ID to exclude from conflict check (e.g., when re-registering).
+         *
+         * @return A comma-separated string of action names that use the given event,
+         *         or an empty string if there are no conflicts.
+         */
+        auto find_conflicts_with_event( const input_event &event,
+                                        const std::string &context = "default",
+                                        const std::string &exclude_action_id = "" ) const -> std::string;
+
     private:
         friend class input_context;
 
@@ -339,6 +353,8 @@ class input_manager
         t_input_event_list &get_or_create_event_list( const std::string &action_descriptor,
                 const std::string &context );
         void remove_input_for_action( const std::string &action_descriptor, const std::string &context );
+        void clear_input_for_action( const std::string &action_descriptor, const std::string &context,
+                                     const input_event &event );
         void add_input_for_action( const std::string &action_descriptor, const std::string &context,
                                    const input_event &event );
 
