@@ -58,9 +58,9 @@ Unlock powerful passive abilities as you level. Each trait has requirements you 
 Abandoning your class or resetting traits has consequences:
 
 - **First reset**: Damaged Soul effect (-4 all stats, -25% speed, 3 days duration)
-- **Cumulative resets**: If you reset more than 2 times within a 30-day period, your soul will **shatter**
+- **Cumulative resets**: If you reset 2 or more times within a 30-day period, your soul will **shatter**
 - **Shattered Soul**: Severe penalty (-10 all stats, -40% speed, all body parts damaged to 1 HP, 6 days duration)
-  - **Special**: Shattering refunds all assigned stat points, allowing complete reallocation
+  - **Special**: Shattering refunds all stat points assigned via the system, allowing complete reallocation
   - This is now the only way to reset assigned stat points
 
 Plan your builds carefully!
