@@ -25,6 +25,7 @@
 #include "catalua.h"
 #include "cata_utility.h"
 #include "catalua_impl.h"
+#include "lua_action_menu.h"
 #include "lua_sidebar_widgets.h"
 #include "panels.h"
 #include "clothing_mod.h"
@@ -643,6 +644,7 @@ void DynamicDataLoader::unload_data()
 
     // Has to be cleaned last in case one of the above data collections
     // holds references to Lua functions or tables.
+    cata::lua_action_menu::clear_entries();
     cata::lua_sidebar_widgets::clear_widgets();
     lua.reset();
 }
