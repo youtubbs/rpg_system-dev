@@ -613,15 +613,28 @@ static void draw_traits_tab( ui_adaptor &ui, const catacurses::window &w_traits,
     wnoutrefresh( w_traits );
 }
 
-static void draw_traits_info( const catacurses::window &w_info, const unsigned line,
-                              const std::vector<trait_id> &traitslist )
+static auto get_trait_description_for_display( const Character &you,
+        const trait_id &trait ) -> std::string
+{
+    const auto dynamic_key = std::string( "rpg_mutation_desc_" ) + trait.str();
+    const auto dynamic_desc = you.get_value( dynamic_key );
+    if( !dynamic_desc.empty() ) {
+        return dynamic_desc;
+    }
+
+    return trait->desc();
+}
+
+static void draw_traits_info( const catacurses::window &w_info, const Character &you,
+                              const unsigned line, const std::vector<trait_id> &traitslist )
 {
     werase( w_info );
     if( line < traitslist.size() ) {
         const auto &mdata = traitslist[line].obj();
+        const auto desc = get_trait_description_for_display( you, traitslist[line] );
         // NOLINTNEXTLINE(cata-use-named-point-constants)
         fold_and_print( w_info, point( 1, 0 ), FULL_SCREEN_WIDTH - 2, c_light_gray, string_format(
-                            "%s: %s", colorize( mdata.name(), mdata.get_display_color() ), traitslist[line]->desc() ) );
+                            "%s: %s", colorize( mdata.name(), mdata.get_display_color() ), desc ) );
     }
     wnoutrefresh( w_info );
 }
@@ -1042,7 +1055,7 @@ static void draw_info_window( const catacurses::window &w_info, const Character 
             draw_skills_info( w_info, line, skillslist );
             break;
         case player_display_tab::traits:
-            draw_traits_info( w_info, line, traitslist );
+            draw_traits_info( w_info, you, line, traitslist );
             break;
         case player_display_tab::bionics:
             draw_bionics_info( w_info, line, bionicslist );

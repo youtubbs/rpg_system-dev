@@ -5,7 +5,7 @@ A LitRPG-style progression mod for Cataclysm: Bright Nights that adds experience
 ## Features
 
 - **Experience & Leveling**: Gain XP by killing monsters, level up to 40
-- **Classes**: Choose from 4 base classes and 12 prestige classes (unlocked at level 10)
+- **Classes**: Start with 4 base classes, then branch into higher tiers at level 10 and level 25
 - **Traits**: Unlock powerful passive abilities with stat/skill requirements
 - **Stat Points**: Assign free stat points to permanently increase your stats
 - **Soul System**: Meaningful consequences for abandoning your chosen path
@@ -31,7 +31,13 @@ When you start a new game or load an existing save, you'll receive a **[System I
 
 ### Classes
 
-Class progression is branch-based. The in-game Help screen auto-generates the class tree directly from `rpg_mutations.lua`, so third-party class additions are included automatically.
+Class progression is branch-based and now supports 3 tiers.
+
+- **Tier 1 (base classes)**: available from the start
+- **Tier 2 (prestige classes)**: unlocked at level 10
+- **Tier 3 (elite classes)**: unlocked at level 25
+
+The in-game Help screen auto-generates the class tree directly from `rpg_mutations.lua`, so third-party class additions are included automatically.
 
 Current tree format:
 
@@ -65,15 +71,19 @@ Abandoning your class or resetting traits has consequences:
 
 Plan your builds carefully!
 
-### Level Scaling
+### Scalar Settings
 
-You can adjust the power of class bonuses and periodic effects in the System menu under Help > Adjust Level Scaling:
+You can tune progression in the System menu under Help > Adjust System Scalars:
 
-- **0%** - Disables all level-based class bonuses
-- **50%** - Half effectiveness for balanced gameplay
-- **100%** - Default intended experience (recommended)
+- Class benefit scalar
+- Class penalty scalar
+- Trait benefit scalar
+- Trait penalty scalar
+- XP multiplier
+- Trait level scalar
+- Level growth cap
 
-Note: Manually assigned stat points are not affected by scaling.
+All scalar changes apply immediately and reapply active class/trait mutations.
 
 ## Balance
 
@@ -83,7 +93,11 @@ Worth approximately 25 character creation points. Worth much less in early game,
 
 ## Save Compatibility
 
-This mod can be added to existing saves. When loaded, it will automatically initialize the System for your character with a [System Interface] item. The mod is designed to handle missing values and should not break existing saves, if you're playing with an older version. Ofc make sure to backup, though.
+This mod can be added to existing saves. When loaded, it will automatically initialize the System for your character with a [System Interface] item.
+
+On game start/load, active RPG mutations are re-evaluated and reapplied. This helps existing saves pick up class/trait balance and value changes after mod updates.
+
+The mod is designed to handle missing values and should not break existing saves, if you're playing with an older version. Ofc make sure to backup, though.
 
 ## Screenshots
 
@@ -141,7 +155,13 @@ Formula: **XP = 2.2387 × level^3.65**
 
 ## Dev notes
 
-When you add a class or trait, it must be added both to `traits.json` and to `rpg_mutations.lua`.
+When you add a class or trait, keep these files in sync:
+
+- `traits.json` (actual mutation JSON data)
+- `rpg_mutations.lua` (requirements, branch structure, gameplay metadata)
+- `rpg_extra_effects.lua` (display/formula values shown in the System UI)
+
+`rpg_extra_effects.lua` runs startup validation and logs a warning if an effect label is unknown/unmapped.
 
 Each base class should give a total of 1 stat point per level, and each prestige class should give a total of 1.5 stat points per level. In addition to stat points, classes will give unique bonuses.
 
@@ -155,8 +175,7 @@ If you want to add a new mod, you can call `add_mutation` from your own mod to r
 
 I am not putting these in any particular order, nor are these ideas set-in-place. I'm just literally putting my stream of consciousness in this document.
 
-1. balance the exact numbers of traits and classes to make them overall more balanced
-2. add functionality such that critters and NPCs also have a leveling system. this is the big plan to balance the rpg system because currently it's too easy to snowball in power. Also, ideally the way xp is gained should transition away from purely health and should be a combination of considering level, HP, and other stats in combination with eachother to decide how much xp is granted. cuz theres a lot of really difficult creatures to deal with that end up granting like 2 xp per kill. 
-3. following up from previous todo, need to deal with situations in which critters choose a 'non-combat' class/trait like scholar/sage/etc. i was throwing the idea around of converting critters into npcs after enough accumulated levels + intelligence + skills? it seems actually feasible to do this because there isn't any data loss to convert them to npcs i dont think? It would also add a bunch of facinating options for other mods, too. 
-4. add more difficulty options. some ppl would just wanna use the rpg system to supplement their game as an alternative to stats through kills and others would want it to actually change their entire gameplay system. plan is to add different distributions of levels of NPCs/critters to choose from (e.g. choose low chance that they spawn with higher levels, weighted by their evaluated 'power', versus a hell mode where levels are evenly distributed across range 1-40 no matter the creature). Maybe higher levels are locked behind a higher difficulty?
-5. add more onto the 'soul' mechanic. maybe there can be mobs that can damage your soul or something? maybe damaged souls should have penalties like xp loss? maybe under a lot of unhappiness or pain you have the chance of damaging your soul as a way to prevent character abuse?
+1. [PARTLY DONE] balance the exact numbers of traits and classes to make them overall more balanced 
+2. add functionality such that critters and NPCs also have a leveling system. this is the big plan to balance the rpg system because currently it's too easy to snowball in power. Also, ideally the way xp is gained should transition away from purely health and should be a combination of considering level, HP, and other stats in combination with eachother to decide how much xp is granted. cuz theres a lot of really difficult creatures to deal with that end up granting like 2 xp per kill. [MAIN IDEA: GRANT XP TO CRITTERS/NPCS BASED ON TIME ELAPSED + IF THEY KILL SOMETHING. ADD SCALARS FOR THESE OPTIONS, THE SAME SCALARS THAT IS AVAILABLE TO THE PLAYER CURRENTLY, AND SETTINGS FOR MIN/MAX LEVELS FOR NON-PLAYERS]
+3. following up from previous todo, need to deal with situations in which critters choose a 'non-combat' class/trait like scholar/sage/etc. i was throwing the idea around of converting critters into npcs after enough accumulated levels + intelligence + skills? it seems actually feasible to do this because there isn't any data loss to convert them to npcs i dont think? It would also add a bunch of facinating options for other mods, too.  [MAYBE DOABLE]
+4. add more onto the 'soul' mechanic. maybe there can be mobs that can damage your soul or something? maybe damaged souls should have penalties like xp loss? maybe under a lot of unhappiness or pain you have the chance of damaging your soul as a way to prevent character abuse? [MODIFIED CURRENT LEVELING IMPLEMENTATION SO DECREASING LEVELS DOESNT BREAK YOUR GAME. I THINK THAT THIS IS DOABLE THOUGH; I ALREADY ADDED 'level upper' AND 'level downer' DEBUG EFFECTS; JUST NEED TO FIND SITUATIONS TO USE THEM.]

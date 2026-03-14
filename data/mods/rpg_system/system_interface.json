@@ -52,6 +52,12 @@
     "permanent": true
   },
   {
+    "id": "morale_rpg_system",
+    "type": "morale_type",
+    "text": "Your system-enhanced state",
+    "permanent": false
+  },
+  {
     "type": "effect_type",
     "id": "soul_shattered",
     "name": [ "Shattered Soul" ],
@@ -74,6 +80,22 @@
       "pain_max_val": [ 100 ],
       "morale": [ -40 ]
     }
+  },
+  {
+    "type": "effect_type",
+    "id": "level_upper",
+    "name": [ "Level Upper" ],
+    "desc": [ "level going up once per second. (debug effect)" ],
+    "rating": "good",
+    "max_duration": "1 h"
+  },
+  {
+    "type": "effect_type",
+    "id": "level_downer",
+    "name": [ "Level Downer" ],
+    "desc": [ "level going down once per second. (debug effect)" ],
+    "rating": "bad",
+    "max_duration": "1 h"
   },
   {
     "type": "recipe",

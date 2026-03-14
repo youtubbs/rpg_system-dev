@@ -4,6 +4,7 @@ gdebug.log_info("RPG System: Main")
 local mod = game.mod_runtime[game.current_mod]
 local storage = game.mod_storage[game.current_mod]
 local mutations = require("rpg_mutations")
+local EXTRA_EFFECTS = require("rpg_extra_effects")
 local Mutation = mutations.Mutation
 local MUTATIONS = mutations.MUTATIONS
 local ALL_CLASS_IDS = mutations.ALL_CLASS_IDS
@@ -70,6 +71,86 @@ local XP_EXPONENT = 3.65
 local LEVELS_PER_STAT_POINT = 2
 local LEVELS_PER_TRAIT_SLOT = 5
 local DEFAULT_SYSTEM_MENU_KEY = "END"
+local TRAIT_LEVEL_STEP = 0.02
+
+local get_scalars
+
+local COST_LIKE_LABELS = {
+  ["Attack Cost"] = true,
+  ["Move Cost"] = true,
+  ["Reading Speed"] = true,
+  ["Fall Damage"] = true,
+  ["Noise"] = true,
+  ["Scent"] = true,
+}
+
+local MULTIPLIER_LABELS = {
+  ["Crafting Speed"] = true,
+  ["Construction Speed"] = true,
+  ["Healing Awake"] = true,
+  ["Healing Resting"] = true,
+  ["Hearing"] = true,
+  ["Mana Regen"] = true,
+  ["Max Stamina"] = true,
+  ["Speed"] = true,
+  ["Stealth"] = true,
+  ["Weight Capacity"] = true,
+}
+
+local SCALAR_DEFAULTS = {
+  rpg_class_benefit_scalar = 1.0,
+  rpg_class_penalty_scalar = 1.0,
+  rpg_trait_benefit_scalar = 1.0,
+  rpg_trait_penalty_scalar = 1.0,
+  rpg_trait_level_scalar = 0.5,
+  rpg_xp_multiplier = 1.0,
+  rpg_effect_growth_cap = 0.30,
+}
+
+local LEGACY_TRAIT_IDS = {
+  "RPG_TRAIT_BIONIC_SYMBIOTE",
+  "RPG_TRAIT_VITAL_ESSENCE",
+  "RPG_TRAIT_RADIOACTIVE_BLOOD",
+  "RPG_TRAIT_IRON_HIDE",
+  "RPG_TRAIT_LIGHTWEIGHT",
+  "RPG_TRAIT_PACK_MULE",
+  "RPG_TRAIT_TIRELESS",
+  "RPG_TRAIT_MANA_FONT",
+  "RPG_TRAIT_BLINK_STEP",
+  "RPG_TRAIT_NATURAL_HEALER",
+  "RPG_TRAIT_ADAPTIVE_BIOLOGY",
+  "RPG_TRAIT_GLASS_CANNON",
+  "RPG_TRAIT_JUGGERNAUT",
+  "RPG_TRAIT_ARCANE_BATTERY",
+  "RPG_TRAIT_IRON_FISTS",
+  "RPG_TRAIT_EFFICIENT_METABOLISM",
+  "RPG_TRAIT_COMBAT_REFLEXES",
+  "RPG_TRAIT_ACROBAT",
+  "RPG_TRAIT_TIRELESS_WORKER",
+  "RPG_TRAIT_RAPID_METABOLISM",
+  "RPG_TRAIT_SCENTLESS",
+  "RPG_TRAIT_CLOTTING_FACTOR",
+  "RPG_TRAIT_REGENERATOR",
+  "RPG_TRAIT_MASTER_CRAFTSMAN",
+  "RPG_TRAIT_PACK_RAT",
+  "RPG_TRAIT_NATURAL_BUTCHER",
+  "RPG_TRAIT_VAMPIRIC",
+}
+
+local FORCED_OBSOLETE_TRAIT_IDS = {
+  RPG_TRAIT_ADAPTIVE_BIOLOGY = true,
+}
+
+--- Maps canonical trait IDs (strings) to their MagicalNights variant IDs.
+--- Variants apply old spellcraft bonuses when MagicalNights is active;
+--- canonical entries apply mana bonuses when it is not.
+local MN_TRAIT_VARIANTS = {
+  ["RPG_TRAIT_SPELL_RESONANCE"] = "RPG_TRAIT_SPELL_RESONANCE_MN",
+  ["RPG_TRAIT_ESSENCE_DRAIN"]   = "RPG_TRAIT_ESSENCE_DRAIN_MN",
+}
+local MN_CLASS_VARIANTS = {
+  ["RPG_SAGE"] = "RPG_SAGE_MN",
+}
 
 -- Function to register a new mutation with the RPG system (can be called by other mods)
 -- config: table with mutation properties (id, type, symbol, requirements, stat_bonuses, etc.)
@@ -111,6 +192,519 @@ end
 
 local function set_char_value(char, key, value) char:set_value(key, tostring(value)) end
 
+local function get_scalar_value(char, key)
+  local default = SCALAR_DEFAULTS[key] or 1.0
+  return get_char_value(char, key, default)
+end
+
+local function ensure_scalar_value(char, key)
+  local normalized = get_scalar_value(char, key)
+  set_char_value(char, key, normalized)
+  return normalized
+end
+
+local function format_decimal(value)
+  return string.format("%.3f", value)
+end
+
+local function is_core_stat_label(label)
+  return label == "STR" or label == "DEX" or label == "INT" or label == "PER"
+end
+
+local function get_effect_mode(label)
+  if COST_LIKE_LABELS[label] then
+    return "cost"
+  end
+  if MULTIPLIER_LABELS[label] then
+    return "multiplier"
+  end
+  return "additive"
+end
+
+local function get_effect_scalar_kind(label, value, scalar_kind)
+  local effect_mode = get_effect_mode(label)
+  if effect_mode == "cost" then
+    return value < 1 and "benefit" or "penalty"
+  end
+  if effect_mode == "multiplier" then
+    return value < 1 and "penalty" or "benefit"
+  end
+  if label == "Metabolism" then
+    return value > 0 and "penalty" or "benefit"
+  end
+  return scalar_kind
+end
+
+local function uses_level_scaling(mutation_type, label)
+  if mutation_type == "trait" then
+    return true
+  end
+  return is_core_stat_label(label)
+end
+
+local function get_mutation_unlock_level(mutation)
+  if not mutation or not mutation.requirements or not mutation.requirements.level then
+    return 1
+  end
+  return math.max(1, mutation.requirements.level)
+end
+
+local function get_level_factor_for_effect(mutation_type, level, scalars, apply_level_scaling, unlock_level)
+  if not apply_level_scaling then
+    return 1.0
+  end
+  local scaled_levels = math.max(level - unlock_level, 0)
+  if mutation_type == "class" then
+    return 1 + scaled_levels
+  end
+  return 1 + scaled_levels * TRAIT_LEVEL_STEP * scalars.trait_level_scalar
+end
+
+local function get_adjusted_level_factor(mutation_type, label, level, scalars, scalar_kind, unlock_level)
+  local base_factor = get_level_factor_for_effect(mutation_type, level, scalars, uses_level_scaling(mutation_type, label), unlock_level)
+  local growth = base_factor - 1.0
+  local cap = math.max(0.0, scalars.effect_growth_cap or 0.30)
+
+  if growth > cap then
+    growth = cap
+  elseif growth < -cap then
+    growth = -cap
+  end
+
+  return 1.0 + growth
+end
+
+local function clamp_relative_effect_value(label, value)
+  if label == "Scent" then
+    return math.max(0.0, value)
+  end
+  if label == "Fall Damage" then
+    return math.max(0.0, math.min(value, 1.0))
+  end
+  return value
+end
+
+local function get_relative_effect_value(effect_mode, scalar_kind, value, scalar_value, level_factor)
+  local distance_from_neutral = math.abs(value - 1.0)
+  local scaled_distance = distance_from_neutral * scalar_value * level_factor
+
+  if effect_mode == "cost" then
+    if scalar_kind == "benefit" then
+      return 1.0 - scaled_distance, distance_from_neutral, "-"
+    end
+    return 1.0 + scaled_distance, distance_from_neutral, "+"
+  end
+
+  if scalar_kind == "benefit" then
+    return 1.0 + scaled_distance, distance_from_neutral, "+"
+  end
+  return 1.0 - scaled_distance, distance_from_neutral, "-"
+end
+
+local function get_relative_expression(value)
+  if value >= 1.0 then
+    return string.format("(%s - 1.000)", format_decimal(value))
+  end
+  return string.format("(1.000 - %s)", format_decimal(value))
+end
+
+--- Build a single formula display line.
+--- mode == "compact": "LABEL: orig => final"  (for @ mutations tab)
+--- mode == "detailed": "LABEL: orig => calculation = final"  (for System menu)
+local function build_formula_line(mutation, label, value, scalar_kind, level, scalars, mode)
+  local mutation_type = mutation.type
+  local resolved_scalar_kind = get_effect_scalar_kind(label, value, scalar_kind)
+  local effect_mode = get_effect_mode(label)
+  local apply_level_scaling = uses_level_scaling(mutation_type, label)
+  local unlock_level = get_mutation_unlock_level(mutation)
+  local is_class_core = (mutation_type == "class") and is_core_stat_label(label)
+  local scalar_value = mutation_type == "class"
+    and (resolved_scalar_kind == "penalty" and scalars.class_penalty or scalars.class_benefit)
+    or (resolved_scalar_kind == "penalty" and scalars.trait_penalty or scalars.trait_benefit)
+
+  local orig_str = format_decimal(value)
+  local final_value, formula_str
+
+  if is_class_core then
+    -- STR/DEX/INT/PER for class mutations: direct linear scaling (base * scalar * level)
+    local is_penalty = value < 0
+    local sc = is_penalty and scalars.class_penalty or scalars.class_benefit
+    final_value = math.floor(value * sc * level)
+    formula_str = string.format("%s * %s * %d", format_decimal(value), format_decimal(sc), level)
+  elseif effect_mode ~= "additive" then
+    local level_factor = get_adjusted_level_factor(mutation_type, label, level, scalars, resolved_scalar_kind, unlock_level)
+    local fv, distance_from_neutral, direction = get_relative_effect_value(
+      effect_mode, resolved_scalar_kind, value, scalar_value, level_factor
+    )
+    final_value = clamp_relative_effect_value(label, fv)
+    local relative_expr = get_relative_expression(value)
+    local scalar_expr = string.format("%s * %s", format_decimal(distance_from_neutral), format_decimal(scalar_value))
+    if apply_level_scaling then
+      scalar_expr = scalar_expr .. " * " .. format_decimal(level_factor)
+    end
+    formula_str = string.format("1.000 %s (%s * %s)", direction, relative_expr, scalar_expr)
+  else
+    local level_factor = get_adjusted_level_factor(mutation_type, label, level, scalars, resolved_scalar_kind, unlock_level)
+    local scaled_value = value * scalar_value
+    if apply_level_scaling then
+      final_value = scaled_value * level_factor
+    else
+      final_value = scaled_value
+    end
+    formula_str = string.format("%s * %s", format_decimal(value), format_decimal(scalar_value))
+    if apply_level_scaling then
+      formula_str = formula_str .. " * " .. format_decimal(level_factor)
+    end
+  end
+
+  if mode == "compact" then
+    return string.format("%s: %s => %s", label, orig_str, format_decimal(final_value))
+  end
+  return string.format("%s: %s => %s = %s", label, orig_str, formula_str, format_decimal(final_value))
+end
+
+local function strip_scaling_block(text)
+  if not text then return "" end
+  local marker = text:find("\n\n[Scaling]", 1, true)
+  if marker then
+    return text:sub(1, marker - 1)
+  end
+  return text
+end
+
+local function get_base_mutation_description(mutation)
+  return strip_scaling_block(mutation:get_mutation_id():obj():desc())
+end
+
+local function add_formula_line(lines, level, scalars, mutation, label, value, scalar_kind, mode)
+  table.insert(lines, build_formula_line(mutation, label, value, scalar_kind, level, scalars, mode))
+end
+
+local function add_stat_formula_lines(lines, level, scalars, mutation, mode)
+  local bonuses = mutation.stat_bonuses
+  if bonuses.str then add_formula_line(lines, level, scalars, mutation, "STR", bonuses.str, bonuses.str < 0 and "penalty" or "benefit", mode) end
+  if bonuses.dex then add_formula_line(lines, level, scalars, mutation, "DEX", bonuses.dex, bonuses.dex < 0 and "penalty" or "benefit", mode) end
+  if bonuses.int then add_formula_line(lines, level, scalars, mutation, "INT", bonuses.int, bonuses.int < 0 and "penalty" or "benefit", mode) end
+  if bonuses.per then add_formula_line(lines, level, scalars, mutation, "PER", bonuses.per, bonuses.per < 0 and "penalty" or "benefit", mode) end
+  if bonuses.speed then add_formula_line(lines, level, scalars, mutation, "Speed Bonus", bonuses.speed, bonuses.speed < 0 and "penalty" or "benefit", mode) end
+end
+
+local function add_periodic_formula_lines(lines, level, scalars, mutation, mode)
+  local bonuses = mutation.periodic_bonuses
+  if bonuses.fatigue then add_formula_line(lines, level, scalars, mutation, "Fatigue", bonuses.fatigue, bonuses.fatigue > 0 and "penalty" or "benefit", mode) end
+  if bonuses.stamina then add_formula_line(lines, level, scalars, mutation, "Stamina", bonuses.stamina, bonuses.stamina < 0 and "penalty" or "benefit", mode) end
+  if bonuses.thirst then add_formula_line(lines, level, scalars, mutation, "Thirst", bonuses.thirst, bonuses.thirst > 0 and "penalty" or "benefit", mode) end
+  if bonuses.rad then add_formula_line(lines, level, scalars, mutation, "Radiation", bonuses.rad, bonuses.rad > 0 and "penalty" or "benefit", mode) end
+  if bonuses.healthy_mod then add_formula_line(lines, level, scalars, mutation, "Health", bonuses.healthy_mod, bonuses.healthy_mod < 0 and "penalty" or "benefit", mode) end
+  if bonuses.power_level then add_formula_line(lines, level, scalars, mutation, "Power", bonuses.power_level, bonuses.power_level < 0 and "penalty" or "benefit", mode) end
+  if bonuses.morale then add_formula_line(lines, level, scalars, mutation, "Morale", bonuses.morale, bonuses.morale < 0 and "penalty" or "benefit", mode) end
+end
+
+local function add_kill_formula_lines(lines, level, scalars, mutation, mode)
+  local bonuses = mutation.kill_monster_bonuses
+  if bonuses.heal_percent then
+    add_formula_line(lines, level, scalars, mutation, "Heal On Kill", bonuses.heal_percent, bonuses.heal_percent < 0 and "penalty" or "benefit", mode)
+  end
+end
+
+local function build_formula_text(player, mutation, mode)
+  local lines = {}
+  local level = get_char_value(player, "rpg_level", 0)
+  local scalars = get_scalars(player)
+
+  add_stat_formula_lines(lines, level, scalars, mutation, mode)
+  add_periodic_formula_lines(lines, level, scalars, mutation, mode)
+  add_kill_formula_lines(lines, level, scalars, mutation, mode)
+
+  local extra_effects = EXTRA_EFFECTS[mutation.id]
+  if extra_effects then
+    for _, effect in ipairs(extra_effects) do
+      add_formula_line(lines, level, scalars, mutation, effect.label, effect.value, effect.scalar, mode)
+    end
+  end
+
+  local sep = mode == "compact" and "; " or "\n"
+  return table.concat(lines, sep)
+end
+
+local function get_mutation_description(mutation, player, include_formula, mode)
+  local base_desc = get_base_mutation_description(mutation)
+  if not include_formula or not player then
+    return base_desc
+  end
+
+  local formula_mode = mode or "detailed"
+  local formula_text = build_formula_text(player, mutation, formula_mode)
+  if formula_text == "" then
+    return base_desc
+  end
+  if base_desc == "" then
+    return formula_text
+  end
+  return base_desc .. "\n\n" .. formula_text
+end
+
+local function prompt_scalar_value(options)
+  local input = PopupInputStr.new()
+  input:title(options.title)
+  input:desc(options.desc .. "\nCurrent: " .. format_decimal(options.current))
+
+  local raw_value = input:query_str()
+  if raw_value == "" then
+    return nil
+  end
+
+  local numeric_value = tonumber(raw_value)
+  if not numeric_value then
+    gapi.add_msg(MsgType.warning, color_warning(gettext("Enter a valid number.")))
+    return nil
+  end
+
+  if numeric_value < options.minimum then
+    gapi.add_msg(MsgType.warning, color_warning(string.format(gettext("Value must be at least %.3f."), options.minimum)))
+    return nil
+  end
+
+  return numeric_value
+end
+
+local function update_level_rewards(player, old_level, new_level)
+  if old_level == new_level then
+    return
+  end
+
+  local stat_points = get_char_value(player, "rpg_stat_points", 0)
+  local max_traits = get_char_value(player, "rpg_max_traits", 1)
+
+  if new_level > old_level then
+    for current_level = old_level + 1, new_level do
+      if current_level % LEVELS_PER_STAT_POINT == 0 then
+        stat_points = stat_points + 1
+      end
+      if current_level % LEVELS_PER_TRAIT_SLOT == 0 then
+        max_traits = max_traits + 1
+      end
+    end
+  else
+    for current_level = old_level, new_level + 1, -1 do
+      if current_level % LEVELS_PER_STAT_POINT == 0 then
+        stat_points = math.max(0, stat_points - 1)
+      end
+      if current_level % LEVELS_PER_TRAIT_SLOT == 0 then
+        max_traits = math.max(1, max_traits - 1)
+      end
+    end
+    -- Reset XP to the start of new_level so no excess XP remains
+    local new_exp = math.floor(rpg_xp_needed(new_level))
+    set_char_value(player, "rpg_exp", new_exp)
+  end
+
+  set_char_value(player, "rpg_level", new_level)
+  set_char_value(player, "rpg_stat_points", stat_points)
+  set_char_value(player, "rpg_max_traits", max_traits)
+  set_char_value(player, "rpg_xp_to_next_level", math.max(0, rpg_xp_needed(math.min(new_level + 1, 40)) - get_char_value(player, "rpg_exp", 0)))
+end
+
+local function apply_level_effects(player)
+  if not player then return end
+
+  local delta = 0
+  if player:has_effect(EffectTypeId.new("level_upper")) then
+    delta = delta + 1
+  end
+  if player:has_effect(EffectTypeId.new("level_downer")) then
+    delta = delta - 1
+  end
+  if delta == 0 then return end
+
+  local old_level = get_char_value(player, "rpg_level", 0)
+  local new_level = math.max(0, math.min(40, old_level + delta))
+  if new_level == old_level then return end
+
+  update_level_rewards(player, old_level, new_level)
+  player:reset()
+end
+
+local function is_mod_active(mod_id)
+  if not game.active_mods then return false end
+  for _, active_mod in pairs(game.active_mods) do
+    if tostring(active_mod) == mod_id then
+      return true
+    end
+  end
+  return false
+end
+
+local function has_magical_nights()
+  return is_mod_active("MagicalNights")
+end
+
+local function is_obsolete_trait_id(trait_id)
+  if FORCED_OBSOLETE_TRAIT_IDS[trait_id] then
+    return true
+  end
+  if MUTATIONS[trait_id] ~= nil then
+    return false
+  end
+  for _, legacy_id in ipairs(LEGACY_TRAIT_IDS) do
+    if legacy_id == trait_id then
+      return true
+    end
+  end
+  return false
+end
+
+--- Returns true if the character has the mutation directly or via its MagicalNights variant.
+local function player_has_mod_mutation(character, mutation_id)
+  if character:has_trait(mutation_id) then return true end
+  local variant = MN_TRAIT_VARIANTS[mutation_id:str()] or MN_CLASS_VARIANTS[mutation_id:str()]
+  return variant ~= nil and character:has_trait(MutationBranchId.new(variant))
+end
+
+local function reapply_active_mutations(player)
+  local active_class_strs = {}
+  local active_trait_strs = {}
+
+  for _, class_id in ipairs(ALL_CLASS_IDS) do
+    local s = class_id:str()
+    local variant = MN_CLASS_VARIANTS[s]
+    if player:has_trait(class_id) or (variant ~= nil and player:has_trait(MutationBranchId.new(variant))) then
+      table.insert(active_class_strs, s)
+    end
+  end
+
+  for _, trait_id in ipairs(ALL_TRAIT_IDS) do
+    local s = trait_id:str()
+    local variant = MN_TRAIT_VARIANTS[s]
+    if player:has_trait(trait_id) or (variant ~= nil and player:has_trait(MutationBranchId.new(variant))) then
+      table.insert(active_trait_strs, s)
+    end
+  end
+
+  for _, s in ipairs(active_class_strs) do
+    player:remove_mutation(MutationBranchId.new(s), true)
+    local variant = MN_CLASS_VARIANTS[s]
+    if variant then player:remove_mutation(MutationBranchId.new(variant), true) end
+  end
+
+  for _, s in ipairs(active_trait_strs) do
+    player:remove_mutation(MutationBranchId.new(s), true)
+    local variant = MN_TRAIT_VARIANTS[s]
+    if variant then player:remove_mutation(MutationBranchId.new(variant), true) end
+  end
+
+  local mn = has_magical_nights()
+  for _, s in ipairs(active_class_strs) do
+    local apply_id = (mn and MN_CLASS_VARIANTS[s]) or s
+    player:set_mutation(MutationBranchId.new(apply_id))
+  end
+
+  for _, s in ipairs(active_trait_strs) do
+    local apply_id = (mn and MN_TRAIT_VARIANTS[s]) or s
+    player:set_mutation(MutationBranchId.new(apply_id))
+  end
+end
+
+local function remove_obsolete_traits_and_refund(player)
+  local removed_count = 0
+  for _, legacy_id in ipairs(LEGACY_TRAIT_IDS) do
+    if is_obsolete_trait_id(legacy_id) then
+      local trait_id = MutationBranchId.new(legacy_id)
+      if player:has_trait(trait_id) then
+        player:remove_mutation(trait_id, true)
+        removed_count = removed_count + 1
+      end
+    end
+  end
+
+  if removed_count > 0 then
+    local current_traits = get_char_value(player, "rpg_num_traits", 0)
+    set_char_value(player, "rpg_num_traits", math.max(0, current_traits - removed_count))
+    gapi.add_msg(
+      MsgType.info,
+      color_info(
+        string.format(
+          vgettext(
+            "Removed %d obsolete RPG trait and refunded one trait slot.",
+            "Removed %d obsolete RPG traits and refunded trait slots.",
+            removed_count
+          ),
+          removed_count
+        )
+      )
+    )
+  end
+end
+
+function get_scalars(player)
+  return {
+    class_benefit = get_scalar_value(player, "rpg_class_benefit_scalar"),
+    class_penalty = get_scalar_value(player, "rpg_class_penalty_scalar"),
+    trait_benefit = get_scalar_value(player, "rpg_trait_benefit_scalar"),
+    trait_penalty = get_scalar_value(player, "rpg_trait_penalty_scalar"),
+    trait_level_scalar = get_scalar_value(player, "rpg_trait_level_scalar"),
+    xp_multiplier = get_scalar_value(player, "rpg_xp_multiplier"),
+    effect_growth_cap = get_scalar_value(player, "rpg_effect_growth_cap"),
+  }
+end
+
+local function scale_for_type(value, mutation_type, is_penalty, scalars)
+  if mutation_type == "class" then
+    return value * (is_penalty and scalars.class_penalty or scalars.class_benefit)
+  end
+  return value * (is_penalty and scalars.trait_penalty or scalars.trait_benefit)
+end
+
+local function level_factor_for_mutation(mutation, label, level, scalars, is_penalty)
+  local scalar_kind = is_penalty and "penalty" or "benefit"
+  local unlock_level = get_mutation_unlock_level(mutation)
+  return get_adjusted_level_factor(mutation.type, label, level, scalars, scalar_kind, unlock_level)
+end
+
+local function dynamic_mutation_desc_key(mutation_id)
+  return "rpg_mutation_desc_" .. mutation_id
+end
+
+local function cache_dynamic_mutation_descriptions(player)
+  if not player then return end
+
+  local all_ids = {}
+  for _, class_id in ipairs(ALL_CLASS_IDS) do
+    table.insert(all_ids, class_id)
+  end
+  for _, trait_id in ipairs(ALL_TRAIT_IDS) do
+    table.insert(all_ids, trait_id)
+  end
+
+  for _, mutation_id in ipairs(all_ids) do
+    local id_str = mutation_id:str()
+    local mutation = MUTATIONS[id_str]
+    local has_mutation = player_has_mod_mutation(player, mutation_id)
+    local desc = ""
+
+    if mutation and has_mutation then
+      desc = get_mutation_description(mutation, player, true, "compact")
+    end
+
+    player:set_value(dynamic_mutation_desc_key(id_str), desc)
+
+    local variant = MN_CLASS_VARIANTS[id_str] or MN_TRAIT_VARIANTS[id_str]
+    if variant then
+      player:set_value(dynamic_mutation_desc_key(variant), desc)
+    end
+  end
+end
+
+--- Rebuild all active RPG mutations from current mod data.
+--- This ensures edited mutation json/lua values are reapplied on start/load.
+local function reevaluate_all_mutations(player)
+  if not player then return end
+  remove_obsolete_traits_and_refund(player)
+  reapply_active_mutations(player)
+  player:reset()
+  cache_dynamic_mutation_descriptions(player)
+end
+
 -- Common requirement checking and formatting
 local function check_requirements(player, mutation, current_level)
   local reqs = mutation.requirements
@@ -151,6 +745,10 @@ local function check_requirements(player, mutation, current_level)
   -- Check skill requirements
   if reqs.skills then
     for skill_name, required in pairs(reqs.skills) do
+      if skill_name == "spellcraft" and not has_magical_nights() then
+        local req_info = { type = "skill", label = "Spellcraft", current = required, required = required, met = true }
+        table.insert(all_reqs, req_info)
+      else
       local current = player:get_skill_level(SkillId.new(skill_name))
       local met = current >= required
       local display_name = skill_name:gsub("^%l", string.upper)
@@ -158,6 +756,7 @@ local function check_requirements(player, mutation, current_level)
       table.insert(all_reqs, req_info)
       if not met then
         table.insert(unmet, req_info)
+      end
       end
     end
   end
@@ -192,8 +791,8 @@ end
 local function get_class_info(char)
   for _, class_id in ipairs(ALL_CLASS_IDS) do
     if char:has_trait(class_id) then
-      local class_obj = class_id:obj()
-      return class_obj:name(), class_obj:desc()
+      local mutation = MUTATIONS[class_id:str()]
+      return class_id:obj():name(), mutation and get_mutation_description(mutation, char, false) or strip_scaling_block(class_id:obj():desc())
     end
   end
   return "[None]", nil
@@ -203,8 +802,8 @@ local function get_current_traits(char)
   local current = {}
   for _, trait_id in ipairs(ALL_TRAIT_IDS) do
     if char:has_trait(trait_id) then
-      local trait_obj = trait_id:obj()
-      table.insert(current, { name = trait_obj:name(), desc = trait_obj:desc() })
+      local mutation = MUTATIONS[trait_id:str()]
+      table.insert(current, { name = trait_id:obj():name(), desc = mutation and get_mutation_description(mutation, char, false) or strip_scaling_block(trait_id:obj():desc()) })
     end
   end
   return current
@@ -516,12 +1115,20 @@ mod.on_game_started = function()
   set_char_value(player, "rpg_assigned_dex", 0)
   set_char_value(player, "rpg_assigned_int", 0)
   set_char_value(player, "rpg_assigned_per", 0)
-  set_char_value(player, "rpg_level_scaling", 100)
+  set_char_value(player, "rpg_class_benefit_scalar", 1.0)
+  set_char_value(player, "rpg_class_penalty_scalar", 1.0)
+  set_char_value(player, "rpg_trait_benefit_scalar", 1.0)
+  set_char_value(player, "rpg_trait_penalty_scalar", 1.0)
+  set_char_value(player, "rpg_trait_level_scalar", 0.5)
+  set_char_value(player, "rpg_xp_multiplier", 1.0)
+  set_char_value(player, "rpg_effect_growth_cap", 0.30)
   set_char_value(player, "rpg_system_integrated", 0)
   set_char_value(player, "rpg_shatter_stat_refund_done", 0)
 
   -- initialize reset history
   player:set_value("rpg_reset_history", "")
+
+  reevaluate_all_mutations(player)
 
   player:add_item_with_id(ItypeId.new("system_interface"), 1)
   mod.register_system_keybind()
@@ -553,7 +1160,13 @@ mod.on_game_load = function()
     set_char_value(player, "rpg_assigned_dex", 0)
     set_char_value(player, "rpg_assigned_int", 0)
     set_char_value(player, "rpg_assigned_per", 0)
-    set_char_value(player, "rpg_level_scaling", 100)
+    set_char_value(player, "rpg_class_benefit_scalar", 1.0)
+    set_char_value(player, "rpg_class_penalty_scalar", 1.0)
+    set_char_value(player, "rpg_trait_benefit_scalar", 1.0)
+    set_char_value(player, "rpg_trait_penalty_scalar", 1.0)
+    set_char_value(player, "rpg_trait_level_scalar", 0.5)
+    set_char_value(player, "rpg_xp_multiplier", 1.0)
+    set_char_value(player, "rpg_effect_growth_cap", 0.30)
     set_char_value(player, "rpg_system_integrated", 0)
     set_char_value(player, "rpg_shatter_stat_refund_done", 0)
 
@@ -601,6 +1214,16 @@ mod.on_game_load = function()
     set_char_value(player, "rpg_shatter_stat_refund_done", 0)
   end
 
+  ensure_scalar_value(player, "rpg_class_benefit_scalar")
+  ensure_scalar_value(player, "rpg_class_penalty_scalar")
+  ensure_scalar_value(player, "rpg_trait_benefit_scalar")
+  ensure_scalar_value(player, "rpg_trait_penalty_scalar")
+  ensure_scalar_value(player, "rpg_trait_level_scalar")
+  ensure_scalar_value(player, "rpg_xp_multiplier")
+  ensure_scalar_value(player, "rpg_effect_growth_cap")
+
+  reevaluate_all_mutations(player)
+
   mod.register_system_keybind()
   gdebug.log_info("RPG System: Loaded character at level " .. level)
 end
@@ -621,14 +1244,17 @@ mod.on_monster_killed = function(params)
 
   local exp = get_char_value(player, "rpg_exp", 0)
   local old_level = get_char_value(player, "rpg_level", 0)
+  local scalars = get_scalars(player)
 
   local monster_hp = monster:get_hp_max()
-  local xp_gain = math.max(1, math.floor(monster_hp / 10))
+  local xp_gain = math.max(1, math.floor((monster_hp / 10) * scalars.xp_multiplier))
   exp = exp + xp_gain
   set_char_value(player, "rpg_exp", exp)
 
   local new_level = get_rpg_level(exp)
+  local leveled_up = false
   if new_level > old_level then
+    leveled_up = true
     set_char_value(player, "rpg_level", new_level)
 
     local level_msg = color_good("★ ")
@@ -678,6 +1304,8 @@ mod.on_monster_killed = function(params)
           )
       )
     end
+
+    reapply_active_mutations(player)
   end
 
   local xp_needed = rpg_xp_needed(new_level + 1)
@@ -686,18 +1314,24 @@ mod.on_monster_killed = function(params)
 
   -- Apply kill monster bonuses (e.g., healing on kill)
   local level = get_char_value(player, "rpg_level", 0)
-  local level_scaling = get_char_value(player, "rpg_level_scaling", 100) / 100.0
 
   for _, mutation_id in ipairs(KILL_MONSTER_BONUS_IDS) do
-    if player:has_trait(mutation_id) then
+    if player_has_mod_mutation(player, mutation_id) then
       local mutation = MUTATIONS[mutation_id:str()]
       local bonuses = mutation.kill_monster_bonuses
 
       if bonuses.heal_percent then
-        local heal_amount = math.max(1, math.floor(monster_hp * (bonuses.heal_percent * level * level_scaling / 100)))
+        local heal_penalty = get_effect_scalar_kind("Heal On Kill", bonuses.heal_percent, bonuses.heal_percent < 0 and "penalty" or "benefit") == "penalty"
+        local level_factor = level_factor_for_mutation(mutation, "Heal On Kill", level, scalars, heal_penalty)
+        local scaled_heal = scale_for_type(bonuses.heal_percent, mutation.type, heal_penalty, scalars)
+        local heal_amount = math.max(1, math.floor(monster_hp * (scaled_heal * level_factor / 100)))
         player:healall(heal_amount)
       end
     end
+  end
+
+  if leveled_up then
+    cache_dynamic_mutation_descriptions(player)
   end
 end
 
@@ -710,7 +1344,7 @@ mod.on_character_reset_stats = function(params)
   if not character:is_avatar() then return end
 
   local level = get_char_value(character, "rpg_level", 0)
-  local level_scaling = get_char_value(character, "rpg_level_scaling", 100) / 100.0
+  local scalars = get_scalars(character)
 
   -- Apply manually assigned stats
   local assigned_str = get_char_value(character, "rpg_assigned_str", 0)
@@ -725,17 +1359,64 @@ mod.on_character_reset_stats = function(params)
 
   -- Apply stat bonuses from mutations that have them
   for _, mutation_id in ipairs(STAT_BONUS_IDS) do
-    if character:has_trait(mutation_id) then
+    if player_has_mod_mutation(character, mutation_id) then
       local mutation = MUTATIONS[mutation_id:str()]
       local bonuses = mutation.stat_bonuses
 
-      if bonuses.str then character:mod_str_bonus(math.floor(level * bonuses.str * level_scaling)) end
-      if bonuses.dex then character:mod_dex_bonus(math.floor(level * bonuses.dex * level_scaling)) end
-      if bonuses.int then character:mod_int_bonus(math.floor(level * bonuses.int * level_scaling)) end
-      if bonuses.per then character:mod_per_bonus(math.floor(level * bonuses.per * level_scaling)) end
-      if bonuses.speed then character:mod_speed_bonus(math.floor(level * bonuses.speed * level_scaling)) end
+      if bonuses.str then
+        if mutation.type == "class" then
+          local sc = bonuses.str < 0 and scalars.class_penalty or scalars.class_benefit
+          character:mod_str_bonus(math.floor(bonuses.str * sc * level))
+        else
+          local str_penalty = get_effect_scalar_kind("STR", bonuses.str, bonuses.str < 0 and "penalty" or "benefit") == "penalty"
+          local scaled_str = scale_for_type(bonuses.str, mutation.type, str_penalty, scalars)
+          local level_factor = level_factor_for_mutation(mutation, "STR", level, scalars, str_penalty)
+          character:mod_str_bonus(math.floor(level_factor * scaled_str))
+        end
+      end
+      if bonuses.dex then
+        if mutation.type == "class" then
+          local sc = bonuses.dex < 0 and scalars.class_penalty or scalars.class_benefit
+          character:mod_dex_bonus(math.floor(bonuses.dex * sc * level))
+        else
+          local dex_penalty = get_effect_scalar_kind("DEX", bonuses.dex, bonuses.dex < 0 and "penalty" or "benefit") == "penalty"
+          local scaled_dex = scale_for_type(bonuses.dex, mutation.type, dex_penalty, scalars)
+          local level_factor = level_factor_for_mutation(mutation, "DEX", level, scalars, dex_penalty)
+          character:mod_dex_bonus(math.floor(level_factor * scaled_dex))
+        end
+      end
+      if bonuses.int then
+        if mutation.type == "class" then
+          local sc = bonuses.int < 0 and scalars.class_penalty or scalars.class_benefit
+          character:mod_int_bonus(math.floor(bonuses.int * sc * level))
+        else
+          local int_penalty = get_effect_scalar_kind("INT", bonuses.int, bonuses.int < 0 and "penalty" or "benefit") == "penalty"
+          local scaled_int = scale_for_type(bonuses.int, mutation.type, int_penalty, scalars)
+          local level_factor = level_factor_for_mutation(mutation, "INT", level, scalars, int_penalty)
+          character:mod_int_bonus(math.floor(level_factor * scaled_int))
+        end
+      end
+      if bonuses.per then
+        if mutation.type == "class" then
+          local sc = bonuses.per < 0 and scalars.class_penalty or scalars.class_benefit
+          character:mod_per_bonus(math.floor(bonuses.per * sc * level))
+        else
+          local per_penalty = get_effect_scalar_kind("PER", bonuses.per, bonuses.per < 0 and "penalty" or "benefit") == "penalty"
+          local scaled_per = scale_for_type(bonuses.per, mutation.type, per_penalty, scalars)
+          local level_factor = level_factor_for_mutation(mutation, "PER", level, scalars, per_penalty)
+          character:mod_per_bonus(math.floor(level_factor * scaled_per))
+        end
+      end
+      if bonuses.speed then
+        local speed_penalty = get_effect_scalar_kind("Speed Bonus", bonuses.speed, bonuses.speed < 0 and "penalty" or "benefit") == "penalty"
+        local scaled_speed = scale_for_type(bonuses.speed, mutation.type, speed_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Speed Bonus", level, scalars, speed_penalty)
+        character:mod_speed_bonus(math.floor(level_factor * scaled_speed))
+      end
     end
   end
+
+  cache_dynamic_mutation_descriptions(character)
 end
 
 mod.on_every_5_minutes = function()
@@ -748,27 +1429,73 @@ mod.on_every_5_minutes = function()
   local level = get_char_value(player, "rpg_level", 0)
   if level <= 0 then return end
 
-  local level_scaling = get_char_value(player, "rpg_level_scaling", 100) / 100.0
+  local scalars = get_scalars(player)
 
   -- Apply periodic bonuses from mutations that have them
   for _, mutation_id in ipairs(PERIODIC_BONUS_IDS) do
-    if player:has_trait(mutation_id) then
+    if player_has_mod_mutation(player, mutation_id) then
       local mutation = MUTATIONS[mutation_id:str()]
       local bonuses = mutation.periodic_bonuses
 
-      if bonuses.fatigue then player:mod_fatigue(math.floor(level * bonuses.fatigue * level_scaling)) end
-      if bonuses.stamina then player:mod_stamina(math.floor(level * bonuses.stamina * level_scaling)) end
-      if bonuses.thirst and player:get_thirst() >= 40 and math.random() > 0.75 then
-        player:mod_thirst(math.floor(level * bonuses.thirst * level_scaling * 4))
+      if bonuses.fatigue then
+        local fatigue_penalty = bonuses.fatigue > 0
+        local scaled_fatigue = scale_for_type(bonuses.fatigue, mutation.type, fatigue_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Fatigue", level, scalars, fatigue_penalty)
+        player:mod_fatigue(math.floor(level_factor * scaled_fatigue))
       end
-      if bonuses.rad then player:mod_rad(math.floor(level * bonuses.rad * level_scaling)) end
-      if bonuses.healthy_mod then player:mod_healthy_mod(bonuses.healthy_mod * level * level_scaling, 100) end
+      if bonuses.stamina then
+        local stamina_penalty = get_effect_scalar_kind("Stamina", bonuses.stamina, bonuses.stamina < 0 and "penalty" or "benefit") == "penalty"
+        local scaled_stamina = scale_for_type(bonuses.stamina, mutation.type, stamina_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Stamina", level, scalars, stamina_penalty)
+        player:mod_stamina(math.floor(level_factor * scaled_stamina))
+      end
+      if bonuses.thirst and player:get_thirst() >= 40 and math.random() > 0.75 then
+        local thirst_penalty = bonuses.thirst > 0
+        local scaled_thirst = scale_for_type(bonuses.thirst, mutation.type, thirst_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Thirst", level, scalars, thirst_penalty)
+        player:mod_thirst(math.floor(level_factor * scaled_thirst * 4))
+      end
+      if bonuses.rad then
+        local rad_penalty = bonuses.rad > 0
+        local scaled_rad = scale_for_type(bonuses.rad, mutation.type, rad_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Radiation", level, scalars, rad_penalty)
+        player:mod_rad(math.floor(level_factor * scaled_rad))
+      end
+      if bonuses.healthy_mod then
+        local healthy_penalty = get_effect_scalar_kind("Health", bonuses.healthy_mod, bonuses.healthy_mod < 0 and "penalty" or "benefit") == "penalty"
+        local scaled_healthy = scale_for_type(bonuses.healthy_mod, mutation.type, healthy_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Health", level, scalars, healthy_penalty)
+        player:mod_healthy_mod(scaled_healthy * level_factor, 100)
+      end
+      if bonuses.morale then
+        local morale_penalty = bonuses.morale < 0
+        local scaled_morale = scale_for_type(bonuses.morale, mutation.type, morale_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Morale", level, scalars, morale_penalty)
+        local morale_amount = math.floor(level_factor * scaled_morale)
+        player:add_morale(
+          MoraleTypeDataId.new("morale_rpg_system"),
+          morale_amount,
+          morale_amount,
+          TimeDuration.from_minutes(6),
+          TimeDuration.from_minutes(1),
+          false,
+          nil
+        )
+      end
       if bonuses.power_level then
-        local power_regen = Energy.from_joule(math.floor(level * bonuses.power_level * 1000 * level_scaling))
+        local power_penalty = get_effect_scalar_kind("Power", bonuses.power_level, bonuses.power_level < 0 and "penalty" or "benefit") == "penalty"
+        local scaled_power = scale_for_type(bonuses.power_level, mutation.type, power_penalty, scalars)
+        local level_factor = level_factor_for_mutation(mutation, "Power", level, scalars, power_penalty)
+        local power_regen = Energy.from_joule(math.floor(level_factor * scaled_power * 1000))
         player:mod_power_level(power_regen)
       end
     end
   end
+end
+
+mod.on_every_turn = function()
+  local player = gapi.get_avatar()
+  apply_level_effects(player)
 end
 
 ----------------------------------------------------------------
@@ -1113,15 +1840,17 @@ mod.manage_class_menu = function(player)
           end
         end
 
+        local class_desc = get_mutation_description(mutation, player, true)
+
         table.insert(options,{
           text = display_text,
-          desc = class_obj:desc(),
+          desc = class_desc,
           id = mutation_id,
           mutation = mutation,
           can_select = can_select
         })
 
-        ui:add_w_desc(index, display_text, class_obj:desc())
+        ui:add_w_desc(index, display_text, class_desc)
         index = index + 1
       end
     end
@@ -1168,15 +1897,17 @@ mod.manage_class_menu = function(player)
               end
             end
 
+            local class_desc = get_mutation_description(mutation, player, true)
+
             table.insert(options,{
               text = display_text,
-              desc = class_obj:desc(),
+              desc = class_desc,
               id = mutation_id,
               mutation = mutation,
               can_select = can_select
             })
 
-            ui:add_w_desc(index, display_text, class_obj:desc())
+            ui:add_w_desc(index, display_text, class_desc)
             index = index + 1
           end
         end
@@ -1424,7 +2155,7 @@ mod.manage_traits_menu = function(player)
       table.insert(traits, {
         id = trait_id,
         name = display_name,
-        desc = trait_obj:desc(),
+        desc = get_mutation_description(mutation, player, true),
         can_select = can_select,
         index = index,
       })
@@ -1643,8 +2374,8 @@ mod.show_help_menu = function(player)
       action = "tree",
     },
     {
-      name = gettext("Adjust Level Scaling"),
-      desc = gettext("Fine-tune power scaling for balance"),
+      name = gettext("Adjust System Scalars"),
+      desc = gettext("Tune class/trait bonuses, penalties, and XP scaling"),
       action = "scaling",
     },
     {
@@ -1749,64 +2480,138 @@ mod.show_class_tree_screen = function(player)
 end
 
 mod.adjust_level_scaling = function(player)
-  local current_scaling = get_char_value(player, "rpg_level_scaling", 100)
+  local class_benefit = get_scalar_value(player, "rpg_class_benefit_scalar")
+  local class_penalty = get_scalar_value(player, "rpg_class_penalty_scalar")
+  local trait_benefit = get_scalar_value(player, "rpg_trait_benefit_scalar")
+  local trait_penalty = get_scalar_value(player, "rpg_trait_penalty_scalar")
+  local xp_multiplier = get_scalar_value(player, "rpg_xp_multiplier")
+  local trait_level_scalar = get_scalar_value(player, "rpg_trait_level_scalar")
+  local effect_growth_cap = get_scalar_value(player, "rpg_effect_growth_cap")
 
-  local ui = UiList.new()
-  ui:title(gettext("=== Adjust Level Scaling ==="))
-  ui:desc_enabled(true)
+  while true do
+    local ui = UiList.new()
+    ui:title(gettext("=== Adjust System Scalars ==="))
+    ui:desc_enabled(true)
 
-  local info_text = ""
-  info_text = info_text .. gettext("Current setting:") .. " " .. color_highlight(current_scaling .. "%") .. "\n"
-  info_text = info_text
-    .. color_text(
-      gettext("Affects class bonuses and periodic effects. Things that don't scale with level are unaffected."),
-      "light_gray"
-    )
-    .. "\n"
-  info_text = info_text .. color_text(gettext("Does not affect assigned stats."), "light_gray") .. "\n\n"
+    local info_text = ""
+    info_text = info_text .. color_highlight(gettext("Class Benefit Scalar:")) .. " " .. color_good(format_decimal(class_benefit)) .. "\n"
+    info_text = info_text .. color_highlight(gettext("Class Penalty Scalar:")) .. " " .. color_bad(format_decimal(class_penalty)) .. "\n"
+    info_text = info_text .. color_highlight(gettext("Trait Benefit Scalar:")) .. " " .. color_good(format_decimal(trait_benefit)) .. "\n"
+    info_text = info_text .. color_highlight(gettext("Trait Penalty Scalar:")) .. " " .. color_bad(format_decimal(trait_penalty)) .. "\n"
+    info_text = info_text .. color_highlight(gettext("XP Multiplier:")) .. " " .. color_good(format_decimal(xp_multiplier)) .. "\n"
+    info_text = info_text .. color_highlight(gettext("Trait Level Scalar:")) .. " " .. color_good(format_decimal(trait_level_scalar)) .. "\n\n"
+    info_text = info_text .. color_highlight(gettext("Level Growth Cap:")) .. " " .. color_good(format_decimal(effect_growth_cap)) .. "\n\n"
+    info_text = info_text .. color_text(gettext("Select an entry and type any floating-point value."), "light_gray") .. "\n"
+    info_text = info_text .. color_text(gettext("All changes are applied immediately."), "light_gray") .. "\n"
 
-  ui:text(info_text)
+    ui:text(info_text)
 
-  local options = {
-    {
-      name = gettext("0% (Disable scaling)"),
-      desc = gettext("Disables all level-based class bonuses and periodic effects."),
-      value = 0,
-    },
-    {
-      name = gettext("50% (Half power)"),
-      desc = gettext("Half effectiveness for balanced gameplay."),
-      value = 50,
-    },
-    {
-      name = gettext("100% (Full power)"),
-      desc = gettext("Default intended [System] experience."),
-      value = 100,
-    },
-    {
-      name = color_text(gettext("← Back"), "light_gray"),
-      desc = gettext("Return to help menu"),
-      value = nil,
-    },
-  }
+    local options = {
+      { name = gettext("Set Class Benefit Scalar"), action = "class_benefit" },
+      { name = gettext("Set Class Penalty Scalar"), action = "class_penalty" },
+      { name = gettext("Set Trait Benefit Scalar"), action = "trait_benefit" },
+      { name = gettext("Set Trait Penalty Scalar"), action = "trait_penalty" },
+      { name = gettext("Set XP Multiplier"), action = "xp_multiplier" },
+      { name = gettext("Set Trait Level Scalar"), action = "trait_level_scalar" },
+      { name = gettext("Set Level Growth Cap"), action = "effect_growth_cap" },
+      { name = color_text(gettext("← Back"), "light_gray"), action = "back" },
+    }
 
-  for i, opt in ipairs(options) do
-    local display_name = opt.name
-    if opt.value == current_scaling then display_name = color_good("✓ " .. opt.name) end
-    ui:add_w_desc(i, display_name, opt.desc)
-  end
-
-  local choice_index = ui:query()
-
-  if choice_index > 0 and choice_index <= #options then
-    local chosen = options[choice_index]
-
-    if chosen.value ~= nil then
-      set_char_value(player, "rpg_level_scaling", chosen.value)
-      gapi.add_msg(
-        MsgType.good,
-        string.format(gettext("Level scaling set to %s"), color_highlight(chosen.value .. "%"))
-      )
+    for i, opt in ipairs(options) do
+      ui:add(i, opt.name)
     end
+
+    local choice_index = ui:query()
+    if choice_index <= 0 or choice_index > #options then
+      return
+    end
+
+    local chosen = options[choice_index]
+    if chosen.action == "back" then
+      return
+    end
+
+    if chosen.action == "class_benefit" then
+      local value = prompt_scalar_value({
+        title = gettext("Class Benefit Scalar"),
+        desc = gettext("Enter the class benefit scalar."),
+        current = class_benefit,
+        minimum = 0.0,
+      })
+      if value then
+        class_benefit = value
+        set_char_value(player, "rpg_class_benefit_scalar", class_benefit)
+      end
+    elseif chosen.action == "class_penalty" then
+      local value = prompt_scalar_value({
+        title = gettext("Class Penalty Scalar"),
+        desc = gettext("Enter the class penalty scalar."),
+        current = class_penalty,
+        minimum = 0.0,
+      })
+      if value then
+        class_penalty = value
+        set_char_value(player, "rpg_class_penalty_scalar", class_penalty)
+      end
+    elseif chosen.action == "trait_benefit" then
+      local value = prompt_scalar_value({
+        title = gettext("Trait Benefit Scalar"),
+        desc = gettext("Enter the trait benefit scalar."),
+        current = trait_benefit,
+        minimum = 0.0,
+      })
+      if value then
+        trait_benefit = value
+        set_char_value(player, "rpg_trait_benefit_scalar", trait_benefit)
+      end
+    elseif chosen.action == "trait_penalty" then
+      local value = prompt_scalar_value({
+        title = gettext("Trait Penalty Scalar"),
+        desc = gettext("Enter the trait penalty scalar."),
+        current = trait_penalty,
+        minimum = 0.0,
+      })
+      if value then
+        trait_penalty = value
+        set_char_value(player, "rpg_trait_penalty_scalar", trait_penalty)
+      end
+    elseif chosen.action == "xp_multiplier" then
+      local value = prompt_scalar_value({
+        title = gettext("XP Multiplier"),
+        desc = gettext("Enter the XP multiplier."),
+        current = xp_multiplier,
+        minimum = 0.0,
+      })
+      if value then
+        xp_multiplier = value
+        set_char_value(player, "rpg_xp_multiplier", xp_multiplier)
+      end
+    elseif chosen.action == "trait_level_scalar" then
+      local value = prompt_scalar_value({
+        title = gettext("Trait Level Scalar"),
+        desc = gettext("Enter the trait level scalar. Trait scaling starts from each mutation's unlock level and is capped by Level Growth Cap."),
+        current = trait_level_scalar,
+        minimum = 0.0,
+      })
+      if value then
+        trait_level_scalar = value
+        set_char_value(player, "rpg_trait_level_scalar", trait_level_scalar)
+      end
+    elseif chosen.action == "effect_growth_cap" then
+      local value = prompt_scalar_value({
+        title = gettext("Level Growth Cap"),
+        desc = gettext("Maximum level-based growth (0.30 = 30%). Level scaling stops after this cap for both benefits and penalties."),
+        current = effect_growth_cap,
+        minimum = 0.0,
+      })
+      if value then
+        effect_growth_cap = value
+        set_char_value(player, "rpg_effect_growth_cap", effect_growth_cap)
+      end
+    end
+
+    reapply_active_mutations(player)
+    cache_dynamic_mutation_descriptions(player)
+    player:reset()
   end
 end

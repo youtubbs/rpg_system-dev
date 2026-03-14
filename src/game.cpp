@@ -2441,7 +2441,7 @@ input_context get_default_mode_input_context()
     ctxt.register_action( "SELECT" );
     ctxt.register_action( "SEC_SELECT" );
     const auto runtime_actions = cata::runtime_keybindings::get_registered_action_ids( "DEFAULTMODE" );
-    std::ranges::for_each( runtime_actions, [&]( const std::string &action_id ) {
+    std::ranges::for_each( runtime_actions, [&]( const std::string & action_id ) {
         ctxt.register_action( action_id );
     } );
     return ctxt;

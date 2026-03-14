@@ -10,7 +10,13 @@ function Mutation.new(config)
   self.symbol = config.symbol or ""
   self.is_prestige = config.is_prestige or false
   self.requirements = config.requirements or {} -- { stats = { STR = 8 }, skills = { melee = 6 }, level = 10 }
-  self.stat_bonuses = config.stat_bonuses or {} -- { str = 0.55, dex = 0.2, int = 0.1, per = 0.15, speed = 1 }
+  self.stat_bonuses = {}
+  for stat_name, value in pairs(config.stat_bonuses or {}) do
+    self.stat_bonuses[stat_name] = value
+  end
+  for stat_name, value in pairs(config.stat_bonuses_extra or {}) do
+    self.stat_bonuses[stat_name] = value
+  end
   self.periodic_bonuses = config.periodic_bonuses or {} -- { fatigue = -0.5, stamina = 20, thirst = -1.5, rad = -0.5, healthy_mod = 0.1, power_level = 1 }
   self.kill_monster_bonuses = config.kill_monster_bonuses or {} -- { heal_percent = 0.5 }
   self.base_class = config.base_class -- for prestige classes (the class to remove when selecting this)
@@ -61,7 +67,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_WARRIOR",
-    requirements = { level = 10, stats = { STR = 16 }, skills = { melee = 5 } },
+    requirements = { level = 10, stats = { STR = 20 }, skills = { melee = 7 } },
     stat_bonuses = { str = 0.75, dex = 0.45, int = 0.10, per = 0.20 },
     periodic_bonuses = { stamina = 50 }
   }),
@@ -72,9 +78,10 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_WARRIOR",
-    requirements = { level = 10, stats = { STR = 16, PER = 14 }, skills = { melee = 4 } },
+    requirements = { level = 10, stats = { STR = 18, PER = 14 }, skills = { melee = 6 } },
     stat_bonuses = { str = 0.60, dex = 0.15, int = 0.15, per = 0.60 },
-    periodic_bonuses = { stamina = 50 }
+    periodic_bonuses = { stamina = 50 },
+    armor = { { parts = "ALL", physical = 6 } }
   }),
 
   RPG_SPELLSWORD = Mutation.new({
@@ -83,7 +90,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_WARRIOR",
-    requirements = { level = 10, stats = { STR = 14, INT = 14 }, skills = { melee = 4, spellcraft = 3 } },
+    requirements = { level = 10, stats = { STR = 16, INT = 14 }, skills = { melee = 5, spellcraft = 5 } },
     stat_bonuses = { str = 0.55, dex = 0.35, int = 0.45, per = 0.25 }
   }),
 
@@ -95,7 +102,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_MAGE",
-    requirements = { level = 10, stats = { INT = 16 }, skills = { spellcraft = 5 } },
+    requirements = { level = 10, stats = { INT = 20 }, skills = { spellcraft = 7 } },
     stat_bonuses = { str = 0.10, dex = 0.20, int = 0.75, per = 0.45 }
   }),
 
@@ -105,7 +112,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_MAGE",
-    requirements = { level = 10, stats = { INT = 16 }, skills = { computer = 4, fabrication = 4 } },
+    requirements = { level = 10, stats = { INT = 19 }, skills = { computer = 5, fabrication = 8 } },
     stat_bonuses = { str = 0.05, dex = 0.15, int = 0.80, per = 0.50 }
   }),
 
@@ -115,7 +122,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_MAGE",
-    requirements = { level = 10, stats = { INT = 16, STR = 12 }, skills = { spellcraft = 4, melee = 3 } },
+    requirements = { level = 10, stats = { INT = 16, STR = 14 }, skills = { spellcraft = 5, melee = 5 } },
     stat_bonuses = { str = 0.35, dex = 0.25, int = 0.75, per = 0.25 }
   }),
 
@@ -127,7 +134,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_ROGUE",
-    requirements = { level = 10, stats = { DEX = 16 }, skills = { dodge = 5 } },
+    requirements = { level = 10, stats = { DEX = 20 }, skills = { dodge = 6 } },
     stat_bonuses = { str = 0.10, dex = 0.80, int = 0.20, per = 0.40 }
   }),
 
@@ -137,7 +144,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_ROGUE",
-    requirements = { level = 10, stats = { DEX = 16, PER = 14 }, skills = { dodge = 4, stabbing = 4 } },
+    requirements = { level = 10, stats = { DEX = 16, PER = 14 }, skills = { dodge = 5, stabbing = 5 } },
     stat_bonuses = { str = 0.10, dex = 0.75, int = 0.35, per = 0.30 }
   }),
 
@@ -147,7 +154,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_ROGUE",
-    requirements = { level = 10, stats = { DEX = 14, INT = 14 }, skills = { dodge = 4, spellcraft = 4 } },
+    requirements = { level = 10, stats = { DEX = 16, INT = 14 }, skills = { dodge = 5, spellcraft = 5 } },
     stat_bonuses = { str = 0.10, dex = 0.70, int = 0.55, per = 0.25 }
   }),
 
@@ -157,7 +164,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_ROGUE",
-    requirements = { level = 10, stats = { DEX = 16 }, skills = { melee = 5 } },
+    requirements = { level = 10, stats = { DEX = 18 }, skills = { melee = 6 } },
     stat_bonuses = { str = 0.25, dex = 0.80, int = 0.20, per = 0.40 }
   }),
 
@@ -169,7 +176,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_SCOUT",
-    requirements = { level = 10, stats = { PER = 16 }, skills = { archery = 5, survival = 4 } },
+    requirements = { level = 10, stats = { PER = 20 }, skills = { archery = 5, survival = 5 } },
     stat_bonuses = { str = 0.15, dex = 0.45, int = 0.10, per = 0.80 }
   }),
 
@@ -179,7 +186,7 @@ MUTATIONS = {
     symbol = "★",
     is_prestige = true,
     base_class = "RPG_SCOUT",
-    requirements = { level = 10, stats = { INT = 14 }, skills = { fabrication = 5, mechanics = 4 } },
+    requirements = { level = 10, stats = { INT = 14 }, skills = { fabrication = 5, mechanics = 5 } },
     stat_bonuses = { str = 0.20, dex = 0.30, int = 0.40, per = 0.60 }
   }),
 
@@ -257,10 +264,16 @@ MUTATIONS = {
     requirements = { level = 5, stats = { PER = 12 } },
   }),
 
-  RPG_TRAIT_ADAPTIVE_BIOLOGY = Mutation.new({
-    id = "RPG_TRAIT_ADAPTIVE_BIOLOGY",
+  RPG_TRAIT_HEAT_ADAPTATION = Mutation.new({
+    id = "RPG_TRAIT_HEAT_ADAPTATION",
     type = "trait",
-    requirements = {},
+    requirements = { stats = { STR = 10 } },
+  }),
+
+  RPG_TRAIT_COLD_ADAPTATION = Mutation.new({
+    id = "RPG_TRAIT_COLD_ADAPTATION",
+    type = "trait",
+    requirements = { stats = { STR = 10 } },
   }),
 
   -- Level 10 traits
@@ -269,6 +282,7 @@ MUTATIONS = {
     id = "RPG_TRAIT_GLASS_CANNON",
     type = "trait",
     requirements = { level = 10, stats = { DEX = 16 } },
+    armor = { { parts = "ALL", physical = -5 } }
   }),
 
   RPG_TRAIT_JUGGERNAUT = Mutation.new({
@@ -379,7 +393,7 @@ MUTATIONS = {
     id = "RPG_TRAIT_FOCUSED_MIND",
     type = "trait",
     requirements = { level = 15, stats = { INT = 16, PER = 14 } },
-    periodic_bonuses = { morale = 50 },
+    periodic_bonuses = { morale = 35 },
   }),
 
   RPG_TRAIT_SILENT_STEP = Mutation.new({
@@ -544,8 +558,8 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_BERSERKER",
-    requirements = { level = 25, stats = { STR = 24, DEX = 18 }, skills = { melee = 9 } },
-    stat_bonuses = { str = 1.00, dex = 0.60, int = 0.10, per = 0.30 }
+    requirements = { level = 25, stats = { STR = 30, DEX = 20 }, skills = { melee = 10 } },
+    stat_bonuses = { str = 1.10, dex = 0.60, int = 0.10, per = 0.30 }
   }),
 
   RPG_BLOOD_REAVER = Mutation.new({
@@ -554,7 +568,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_BERSERKER",
-    requirements = { level = 25, stats = { STR = 24, DEX = 20 }, skills = { unarmed = 8 } },
+    requirements = { level = 25, stats = { STR = 25, DEX = 25 }, skills = { unarmed = 10 } },
     stat_bonuses = { str = 1.00, dex = 0.70, int = 0.10, per = 0.20 },
     attackcost_modifier = 0.80
   }),
@@ -565,9 +579,10 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_GUARDIAN",
-    requirements = { level = 25, stats = { STR = 24, PER = 22 }, skills = { bashing = 8 } },
+    requirements = { level = 25, stats = { STR = 26, PER = 22 }, skills = { bashing = 10 } },
     stat_bonuses = { str = 0.90, dex = 0.15, int = 0.15, per = 0.75 },
-    periodic_bonuses = { stamina = 100 }
+    periodic_bonuses = { stamina = 100 },
+    armor = { { parts = "ALL", physical = 14 } }
   }),
 
   RPG_SENTINEL = Mutation.new({
@@ -576,9 +591,9 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_GUARDIAN",
-    requirements = { level = 25, stats = { STR = 20, PER = 24 }, skills = { melee = 9 } },
+    requirements = { level = 25, stats = { STR = 20, PER = 26 }, skills = { melee = 10 } },
     stat_bonuses = { str = 0.60, dex = 0.30, int = 0.20, per = 0.90 },
-    armor = { { parts = "ALL", physical = 6 } }
+    armor = { { parts = "ALL", physical = 9 } }
   }),
 
   RPG_SPELLBLADE = Mutation.new({
@@ -587,7 +602,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_SPELLSWORD",
-    requirements = { level = 25, stats = { STR = 22, INT = 22 }, skills = { melee = 9, spellcraft = 8 } },
+    requirements = { level = 25, stats = { STR = 25, INT = 25 }, skills = { melee = 8, spellcraft = 8 } },
     stat_bonuses = { str = 0.80, dex = 0.45, int = 0.60, per = 0.25 },
     mana_modifier = 1200,
     mana_regen_multiplier = 1.2
@@ -599,7 +614,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_MYSTIC",
-    requirements = { level = 25, stats = { INT = 24, PER = 20 }, skills = { spellcraft = 10 } },
+    requirements = { level = 25, stats = { INT = 30, PER = 20 }, skills = { spellcraft = 10 } },
     stat_bonuses = { str = 0.10, dex = 0.20, int = 1.40, per = 0.30 },
     mana_modifier = 5000,
     mana_regen_multiplier = 1.6
@@ -614,7 +629,7 @@ RPG_WARLORD = Mutation.new({
     requirements = {
       level = 25,
       stats = { INT = 24, PER = 20 },
-      skills = { fabrication = 8, electronics = 8, mechanics = 7, computer = 7 }
+      skills = { fabrication = 9, electronics = 9, mechanics = 7, computer = 7 }
     },
     stat_bonuses = { str = 0.10, dex = 0.30, int = 1.10, per = 0.50 },
     mana_modifier = 2000,
@@ -627,7 +642,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_BATTLEMAGE",
-    requirements = { level = 25, stats = { STR = 20, INT = 22 }, skills = { spellcraft = 9, melee = 8 } },
+    requirements = { level = 25, stats = { STR = 25, INT = 25 }, skills = { spellcraft = 9, melee = 8 } },
     stat_bonuses = { str = 0.60, dex = 0.40, int = 0.80, per = 0.20 },
     mana_modifier = 2200,
     mana_regen_multiplier = 1.35,
@@ -640,11 +655,11 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_BATTLEMAGE",
-    requirements = { level = 25, stats = { STR = 22, INT = 20 }, skills = { fabrication = 7, spellcraft = 8 } },
+    requirements = { level = 25, stats = { STR = 25, INT = 25 }, skills = { fabrication = 9, spellcraft = 9 } },
     stat_bonuses = { str = 0.70, dex = 0.35, int = 0.75, per = 0.20 },
     mana_modifier = 1800,
     mana_regen_multiplier = 1.25,
-    armor = { { parts = "ALL", physical = 5 } }
+    armor = { { parts = "ALL", physical = 8 } }
   }),
 
   RPG_WIND_DANCER = Mutation.new({
@@ -653,7 +668,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_ACROBAT",
-    requirements = { level = 25, stats = { DEX = 24 }, skills = { dodge = 9 } },
+    requirements = { level = 25, stats = { DEX = 30 }, skills = { dodge = 10 } },
     stat_bonuses = { str = 0.15, dex = 1.20, int = 0.20, per = 0.45 },
     movecost_modifier = 0.80,
     dodge_modifier = 8
@@ -665,7 +680,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_ACROBAT",
-    requirements = { level = 25, stats = { DEX = 24 }, skills = { dodge = 9, stealth = 8 } },
+    requirements = { level = 25, stats = { DEX = 30 }, skills = { dodge = 9, stabbing = 9 } },
     stat_bonuses = { str = 0.10, dex = 1.10, int = 0.40, per = 0.40 },
     movecost_modifier = 0.85,
     stealth_modifier = 1.8
@@ -677,7 +692,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_ASSASSIN",
-    requirements = { level = 25, stats = { DEX = 24 }, skills = { dodge = 9, unarmed = 8 } },
+    requirements = { level = 25, stats = { DEX = 30 }, skills = { dodge = 9, unarmed = 9 } },
     stat_bonuses = { str = 0.20, dex = 1.00, int = 0.40, per = 0.40 },
     attackcost_modifier = 0.82,
     movecost_modifier = 0.88
@@ -689,7 +704,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_ARCANE_TRICKSTER",
-    requirements = { level = 25, stats = { DEX = 24, INT = 20 }, skills = { spellcraft = 9, dodge = 9 } },
+    requirements = { level = 25, stats = { DEX = 26, INT = 24 }, skills = { spellcraft = 9, dodge = 9 } },
     stat_bonuses = { str = 0.10, dex = 1.00, int = 0.70, per = 0.20 },
     movecost_modifier = 0.7,
     mana_modifier = 1600,
@@ -702,7 +717,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_ARCANE_TRICKSTER",
-    requirements = { level = 25, stats = { DEX = 22, INT = 22 }, skills = { spellcraft = 9, dodge = 8 } },
+    requirements = { level = 25, stats = { DEX = 25, INT = 25 }, skills = { spellcraft = 9, dodge = 9 } },
     stat_bonuses = { str = 0.10, dex = 0.90, int = 0.80, per = 0.20 },
     movecost_modifier = 0.85,
     mana_modifier = 2200,
@@ -715,7 +730,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_DUELIST",
-    requirements = { level = 25, stats = { DEX = 24, PER = 20 }, skills = { melee = 10, dodge = 9 } },
+    requirements = { level = 25, stats = { DEX = 26, PER = 24 }, skills = { melee = 9, dodge = 9 } },
     stat_bonuses = { str = 0.40, dex = 1.10, int = 0.20, per = 0.30 },
     attackcost_modifier = 0.70,
     movecost_modifier = 0.9,
@@ -728,7 +743,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_RANGER",
-    requirements = { level = 25, stats = { PER = 25, DEX = 20 }, skills = { archery = 10, survival = 9 } },
+    requirements = { level = 25, stats = { PER = 30 }, skills = { archery = 9, survival = 9 } },
     stat_bonuses = { str = 0.30, dex = 0.70, int = 0.20, per = 0.80 },
     movecost_modifier = 0.9,
     night_vision_range = 30
@@ -752,7 +767,7 @@ RPG_WARLORD = Mutation.new({
     symbol = "✦",
     is_prestige = true,
     base_class = "RPG_PATHFINDER",
-    requirements = { level = 25, stats = { DEX = 24, PER = 22 }, skills = { survival = 10, dodge = 9 } },
+    requirements = { level = 25, stats = { DEX = 26, PER = 24 }, skills = { survival = 10, dodge = 9 } },
     stat_bonuses = { str = 0.20, dex = 1.00, int = 0.20, per = 0.60 },
     movecost_modifier = 0.55
   }),
