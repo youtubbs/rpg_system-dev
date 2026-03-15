@@ -2073,7 +2073,6 @@ mod.on_game_started = function()
   reevaluate_all_mutations(player)
 
   player:add_item_with_id(ItypeId.new("system_interface"), 1)
-  player:add_item_with_id(ItypeId.new("analysis_lens"), 1)
   mod.register_system_keybind()
 
   gapi.add_msg(
@@ -2123,7 +2122,6 @@ mod.on_game_load = function()
     end
 
     player:add_item_with_id(ItypeId.new("system_interface"), 1)
-    player:add_item_with_id(ItypeId.new("analysis_lens"), 1)
 
     gapi.add_msg(
       MsgType.mixed,

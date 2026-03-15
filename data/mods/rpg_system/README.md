@@ -8,6 +8,8 @@ A LitRPG-style progression mod for Cataclysm: Bright Nights that adds experience
 - **Classes**: Start with 4 base classes, then branch into higher tiers at level 10 and level 25
 - **Traits**: Unlock powerful passive abilities with stat/skill requirements
 - **Stat Points**: Assign free stat points to permanently increase your stats
+- **Analysis Lens**: Craft a scanner that lets you inspect nearby critters and NPCs through the System
+- **Non-Player Progression**: Critters and NPCs can roll levels, gain XP, pick classes and traits, and scale with their own settings
 - **Soul System**: Meaningful consequences for abandoning your chosen path
 
 ## How It Works
@@ -16,9 +18,24 @@ A LitRPG-style progression mod for Cataclysm: Bright Nights that adds experience
 
 When you start a new game or load an existing save, you'll receive a **[System Interface]** item. Use it once to integrate the System with your character. After integration, the item is no longer needed, and you can access the System via keybind.
 
+You do **not** start with an **Analysis Lens**. If you want to inspect nearby critters and NPCs, you can craft one later once your character reaches **Fabrication 7**.
+
+### Analysis Lens
+
+The **Analysis Lens** is a midgame utility item that lets you inspect a nearby critter or NPC and see its current System state. That includes:
+
+- Level and XP progress
+- Effective stats
+- Class and trait choices
+- Class bonus scaling per level and total class contribution
+- Trait slot usage
+- Predicted XP on kill
+
+Pretty much just tells the same info your system tells you about yourself. 
+
 ### Experience & Levels
 
-- Kill monsters to gain XP (approximately 1 XP per 10 monster HP)
+- Kill monsters to gain XP based on overall threat, not just HP (unlike previous versions of the mod). Health, speed, melee, dodge, power rating, stats, and level all matter.
 - XP requirement increases exponentially: **XP = 2.2387 × level^3.65**
 - Maximum level: 40 (progression slows significantly after level 10)
 - Normal zombies give ~7 XP
@@ -73,15 +90,23 @@ Plan your builds carefully!
 
 ### Scalar Settings
 
-You can tune progression in the System menu under Help > Adjust System Scalars:
+You can tune progression in the System menu under **Help**. The settings are split into two pages:
 
-- Class benefit scalar
-- Class penalty scalar
-- Trait benefit scalar
-- Trait penalty scalar
+- **Player Scalars**: affects your own class/trait scaling and XP gain
+- **Non-Player Scalars**: affects critter/NPC XP, spawn levels, class scaling, level rewards, and background progression
+
+Examples of available non-player settings include:
+
+- Class benefit and penalty scalars
+- Trait benefit and penalty scalars
 - XP multiplier
-- Trait level scalar
-- Level growth cap
+- Passive XP and kill XP scalars
+- Background leveling rate
+- Spawn level chance scalar
+- Speed bonus per level
+- Min/max non-player level
+- Levels per stat point
+- Levels per trait slot
 
 All scalar changes apply immediately and reapply active class/trait mutations.
 
@@ -96,6 +121,8 @@ Worth approximately 25 character creation points. Worth much less in early game,
 This mod can be added to existing saves. When loaded, it will automatically initialize the System for your character with a [System Interface] item.
 
 On game start/load, active RPG mutations are re-evaluated and reapplied. This helps existing saves pick up class/trait balance and value changes after mod updates.
+
+Non-player progression data is initialized lazily as critters and NPCs are loaded or encountered, so existing worlds can pick up the newer non-player systems without needing a fresh start.
 
 The mod is designed to handle missing values and should not break existing saves, if you're playing with an older version. Ofc make sure to backup, though.
 
@@ -176,6 +203,6 @@ If you want to add a new mod, you can call `add_mutation` from your own mod to r
 I am not putting these in any particular order, nor are these ideas set-in-place. I'm just literally putting my stream of consciousness in this document.
 
 1. [PARTLY DONE] balance the exact numbers of traits and classes to make them overall more balanced 
-2. add functionality such that critters and NPCs also have a leveling system. this is the big plan to balance the rpg system because currently it's too easy to snowball in power. Also, ideally the way xp is gained should transition away from purely health and should be a combination of considering level, HP, and other stats in combination with eachother to decide how much xp is granted. cuz theres a lot of really difficult creatures to deal with that end up granting like 2 xp per kill. [MAIN IDEA: GRANT XP TO CRITTERS/NPCS BASED ON TIME ELAPSED + IF THEY KILL SOMETHING. ADD SCALARS FOR THESE OPTIONS, THE SAME SCALARS THAT IS AVAILABLE TO THE PLAYER CURRENTLY, AND SETTINGS FOR MIN/MAX LEVELS FOR NON-PLAYERS]
+2. [PARTLY DONE] critters and NPCs now have their own leveling system, can gain XP over time and on kills, can roll spawn levels, and can pick classes and traits. The remaining work is mostly balance work.
 3. following up from previous todo, need to deal with situations in which critters choose a 'non-combat' class/trait like scholar/sage/etc. i was throwing the idea around of converting critters into npcs after enough accumulated levels + intelligence + skills? it seems actually feasible to do this because there isn't any data loss to convert them to npcs i dont think? It would also add a bunch of facinating options for other mods, too.  [MAYBE DOABLE]
 4. add more onto the 'soul' mechanic. maybe there can be mobs that can damage your soul or something? maybe damaged souls should have penalties like xp loss? maybe under a lot of unhappiness or pain you have the chance of damaging your soul as a way to prevent character abuse? [MODIFIED CURRENT LEVELING IMPLEMENTATION SO DECREASING LEVELS DOESNT BREAK YOUR GAME. I THINK THAT THIS IS DOABLE THOUGH; I ALREADY ADDED 'level upper' AND 'level downer' DEBUG EFFECTS; JUST NEED TO FIND SITUATIONS TO USE THEM.]
