@@ -3,5 +3,10 @@
     "type": "item_action",
     "id": "RPG_SYSTEM_MENU",
     "name": { "str": "Integrate with the [System]" }
+  },
+  {
+    "type": "item_action",
+    "id": "RPG_ANALYSIS_LENS",
+    "name": { "str": "Analyze nearby creature [System]" }
   }
 ]

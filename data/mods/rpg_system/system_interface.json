@@ -16,6 +16,22 @@
     "use_action": [ "RPG_SYSTEM_MENU" ]
   },
   {
+    "id": "analysis_lens",
+    "type": "GENERIC",
+    "category": "tools",
+    "name": { "str": "Analysis Lens" },
+    "description": "A compact scanner that reveals nearby critters' and NPCs' [System] data. Use it to inspect target level, progression, and projected XP yield.",
+    "weight": "50 g",
+    "volume": "250 ml",
+    "price": 0,
+    "price_postapoc": 0,
+    "material": [ "steel", "plastic" ],
+    "symbol": "?",
+    "color": "light_cyan",
+    "flags": [ "TRADER_AVOID" ],
+    "use_action": [ "RPG_ANALYSIS_LENS" ]
+  },
+  {
     "id": "morale_damaged_soul",
     "type": "morale_type",
     "text": "Your soul burns and aches",
@@ -107,5 +123,15 @@
     "autolearn": true,
     "flags": [ "BLIND_EASY" ],
     "components": [ [ [ "rock", 1 ], [ "sharp_rock", 1 ] ] ]
+  },
+  {
+    "type": "recipe",
+    "result": "analysis_lens",
+    "category": "CC_OTHER",
+    "subcategory": "CSC_OTHER_TOOLS",
+    "skill_used": "electronics",
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "scrap", 4 ] ], [ [ "cable", 1 ] ], [ [ "battery", 20 ] ] ]
   }
 ]
