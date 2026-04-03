@@ -11,6 +11,7 @@
 #include <optional>
 #include <queue>
 #include <future>
+#include <ranges>
 
 #include "avatar.h"
 #include "batch_turns.h"
@@ -669,6 +670,26 @@ void overmapbuffer::remove_nemesis()
             break;
         }
     }
+}
+
+mongroup *overmapbuffer::create_horde( const mongroup &group )
+{
+    point_abs_om omp;
+    point_om_sm sm_within_om;
+    std::tie( omp, sm_within_om ) = project_remain<coords::om>( group.abs_pos.xy() );
+
+    overmap &om = get( omp );
+    auto copy = group;
+    copy.pos = tripoint_om_sm( sm_within_om, group.abs_pos.z() );
+    om.add_mon_group( copy );
+
+    auto groups_range = om.zg.equal_range( copy.pos );
+    auto match = std::ranges::find_if( std::ranges::subrange( groups_range.first, groups_range.second ),
+    [&]( const std::pair<tripoint_om_sm, mongroup> &entry ) {
+        const mongroup &stored = entry.second;
+        return stored.type == copy.type && stored.horde == copy.horde;
+    } );
+    return match == groups_range.second ? nullptr : &match->second;
 }
 
 std::vector<mongroup *> overmapbuffer::monsters_at( const tripoint_abs_omt &p )
@@ -1860,15 +1881,6 @@ void overmapbuffer::spawn_monster( const tripoint_abs_sm &p )
         if( placed ) {
             // Keep pos_abs in sync with the placed local position.
             placed->pos_abs = tripoint_abs_ms( ms.x, ms.y, p.z() );
-            // Batch-advance AI state for turns missed while despawned.
-            // Only applies to monsters with a valid (non-zero) last_updated timestamp.
-            // batch_turns() does NOT update last_updated so on_load() can still
-            // perform its biological catchup and sanity checks.
-            if( placed->last_updated > calendar::turn_zero &&
-                placed->last_updated < calendar::turn ) {
-                const int missed = to_turns<int>( calendar::turn - placed->last_updated );
-                placed->batch_turns( missed );
-            }
             placed->on_load();
         }
     } );
@@ -2033,28 +2045,41 @@ bool overmapbuffer::place_special( const overmap_special_id &special_id,
 
 std::set<tripoint_abs_omt> overmapbuffer::electric_grid_at( const tripoint_abs_omt &p )
 {
-    std::set<tripoint_abs_omt> result;
+    // visited is unordered for O(1) insert/lookup vs O(log n) for std::set.
+    std::unordered_set<tripoint_abs_omt> visited;
     std::queue<tripoint_abs_omt> open;
+    // Mark visited at enqueue time (not dequeue) to prevent duplicate queue entries.
+    visited.emplace( p );
     open.emplace( p );
 
+    // Cache the last overmap pointer to avoid a mutex+hashtable hit on every node.
+    // Most grids are contained within a single overmap, so this nearly always hits.
+    point_abs_om cached_om_pos = project_remain<coords::om>( p.xy() ).quotient;
+    overmap *cached_om = &get( cached_om_pos );
+
     while( !open.empty() ) {
-        // It's weired that the game takes a lot of time to copy a tripoint_abs_omt, so use reference here.
-        const tripoint_abs_omt &elem = open.front();
-        result.emplace( elem );
-        overmap_with_local_coords omc = get_om_global( elem );
-        const auto &connections_bitset = omc.om->electric_grid_connections[omc.local];
+        const tripoint_abs_omt elem = open.front();
+        open.pop();
+
+        auto [om_pos, local_2d] = project_remain<coords::om>( elem.xy() );
+        if( om_pos != cached_om_pos ) {
+            cached_om_pos = om_pos;
+            cached_om = &get( om_pos );
+        }
+
+        const auto &connections_bitset = cached_om->electric_grid_connections[tripoint_om_omt( local_2d,
+                                                          elem.z() )];
         for( size_t i = 0; i < six_cardinal_directions.size(); i++ ) {
             if( connections_bitset.test( i ) ) {
                 tripoint_abs_omt other = elem + six_cardinal_directions[i];
-                if( !result.contains( other ) ) {
+                if( visited.emplace( other ).second ) {
                     open.emplace( other );
                 }
             }
         }
-        open.pop();
     }
 
-    return result;
+    return { visited.begin(), visited.end() };
 }
 
 std::vector<tripoint_rel_omt>
